@@ -22,6 +22,14 @@ internal static partial class NativeMethods
     private const string CoreFoundation = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation";
     private const string CoreGraphics = "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics";
     private const string IOKit = "/System/Library/Frameworks/IOKit.framework/IOKit";
+    private const string LibSystem = "/usr/lib/libSystem.B.dylib";
+
+    // unistd.h: uid_t getuid(void). uid_t is __darwin_uid_t = __uint32_t (sys/_types.h, sys/_types/_uid_t.h).
+    // Used only to address the user's launchd domain (gui/<uid>); never fails (POSIX).
+    [LibraryImport(LibSystem, EntryPoint = "getuid")]
+    private static partial uint GetUidNative();
+
+    internal static uint GetUid() => GetUidNative();
 
     // CGEventTypes.h: CGEventSourceStateID, kCGEventSourceStateHIDSystemState = 1
     internal const int EventSourceStateHidSystemState = 1;
