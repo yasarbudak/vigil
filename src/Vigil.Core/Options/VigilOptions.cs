@@ -64,6 +64,15 @@ public sealed class VigilOptions
             errors.AddRange(Schedule.Validate());
         }
 
+        if (ActivityLog is null)
+        {
+            errors.Add("ActivityLog must not be null.");
+        }
+        else
+        {
+            errors.AddRange(ActivityLog.Validate());
+        }
+
         return errors;
     }
 }

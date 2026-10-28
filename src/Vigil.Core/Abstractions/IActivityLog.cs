@@ -21,4 +21,7 @@ public interface IActivityLog
     void Record(ActivityEntry entry);
 
     DailyTotals ReadTotals(DateOnly day);
+
+    /// <summary>Deletes the daily records that fall outside the retention period, counted back from <paramref name="today"/>.</summary>
+    void Prune(DateOnly today);
 }
