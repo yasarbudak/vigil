@@ -18,6 +18,8 @@ internal static class CommandFactory
         root.Subcommands.Add(Resume(paths));
         root.Subcommands.Add(Diag(paths));
         root.Subcommands.Add(Permissions(paths));
+        root.Subcommands.Add(Install(paths));
+        root.Subcommands.Add(Uninstall(paths));
         return root;
     }
 
@@ -100,6 +102,34 @@ internal static class CommandFactory
 
         var command = new Command("permissions", "Manage the OS permission Vigil needs.");
         command.Subcommands.Add(request);
+        return command;
+    }
+
+    private static Command Install(VigilPaths paths)
+    {
+        var force = new Option<bool>("--force")
+        {
+            Description = "Replace an existing autostart entry that points at a different executable.",
+        };
+        var command = new Command(
+            "install",
+            "Start Vigil at login (macOS LaunchAgent). Only runs when you call it; must be run from inside Vigil.app.");
+        command.Options.Add(force);
+        command.SetAction(parseResult =>
+            AutostartCommand.Install(paths, parseResult.GetValue(force), Console.Out, Console.Error));
+        return command;
+    }
+
+    private static Command Uninstall(VigilPaths paths)
+    {
+        var purge = new Option<bool>("--purge")
+        {
+            Description = "Also delete the Vigil data directory (config, activity log, daemon log).",
+        };
+        var command = new Command("uninstall", "Stop Vigil and remove its autostart entry. Keeps the data directory unless --purge is given.");
+        command.Options.Add(purge);
+        command.SetAction(parseResult =>
+            AutostartCommand.Uninstall(paths, parseResult.GetValue(purge), Console.Out, Console.Error));
         return command;
     }
 }

@@ -2,6 +2,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <AssemblyName>vigil</AssemblyName>
+    <Version>0.1.0</Version>
     <RootNamespace>Vigil</RootNamespace>
     <PublishAot>true</PublishAot>
     <IsAotCompatible>true</IsAotCompatible>

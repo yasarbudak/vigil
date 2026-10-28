@@ -15,6 +15,9 @@ internal sealed class VigilPaths(string dataDirectory)
 
     public string SocketPath => Path.Combine(DataDirectory, "vigil.sock");
 
+    /// <summary>Receives stdout and stderr of the daemon when launchd runs it (see <c>vigil install</c>).</summary>
+    public string LogPath => Path.Combine(DataDirectory, "vigil.log");
+
     public string ConfigPath => Path.Combine(DataDirectory, "config.json");
 
     /// <summary>Search pattern that selects the daily activity log files in <see cref="DataDirectory"/>.</summary>
@@ -52,7 +55,8 @@ internal sealed class VigilPaths(string dataDirectory)
 
     public void EnsureDataDirectory() => PrivateDirectory.Ensure(DataDirectory);
 
-    private static string DefaultDirectory()
+    /// <summary>The data directory used when <c>VIGIL_DATA_DIR</c> is not set.</summary>
+    public static string DefaultDirectory()
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
