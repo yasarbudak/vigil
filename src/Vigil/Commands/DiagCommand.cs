@@ -75,5 +75,5 @@ internal static class DiagCommand
     }
 
     private static string Describe(bool? value, string whenTrue, string whenFalse) =>
-        value is { } known ? (known ? whenTrue : whenFalse) : "unknown (not detected on this platform)";
+        value is { } known ? (known ? whenTrue : whenFalse) : "unknown (could not be determined)";
 }

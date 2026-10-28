@@ -8,6 +8,6 @@ internal static class StartupWarnings
 {
     public static string? LockDetection(VigilOptions options, ISessionState session) =>
         options.PauseOnLock && session.IsScreenLocked() is null
-            ? "PauseOnLock is enabled but this platform cannot detect a locked screen, so Vigil will NOT pause while the screen is locked."
+            ? "PauseOnLock is enabled but Vigil could not determine whether the screen is locked, so it will NOT pause while the screen is locked."
             : null;
 }
