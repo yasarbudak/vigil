@@ -27,8 +27,9 @@ public sealed class PresenceEngine
     private bool _injectedSinceActivity;
 
     // Start of the current stretch in which Vigil has been continuously active (not paused, not suspended).
-    // MinValue at start-up; null while paused until the next active evaluation sets it.
-    private DateTimeOffset? _activeSince = DateTimeOffset.MinValue;
+    // Set to the engine's creation time in the constructor, so nothing before the daemon started can ever be
+    // counted as covered; null while paused until the next active evaluation sets it.
+    private DateTimeOffset? _activeSince;
     private DateTimeOffset? _lastEvaluatedAt;
     private DateOnly _day;
     private int _injectionsToday;
@@ -49,6 +50,7 @@ public sealed class PresenceEngine
         _options = options;
         _time = time;
         _log = log;
+        _activeSince = time.GetUtcNow();
 
         _day = DateOnly.FromDateTime(time.GetLocalNow().DateTime);
         var totals = log.ReadTotals(_day);
