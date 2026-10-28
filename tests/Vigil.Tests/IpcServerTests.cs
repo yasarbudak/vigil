@@ -1,4 +1,5 @@
 using System.Net.Sockets;
+using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Vigil.Core.Presence;
 using Vigil.Ipc;
@@ -199,25 +200,52 @@ public class IpcServerTests
     public async Task Connections_beyond_the_limit_are_dropped_and_service_resumes_when_slots_free_up()
     {
         using var dir = new TempDataDirectory();
-        using var server = CreateServer(dir.Paths, clientTimeout: TimeSpan.FromSeconds(2));
+        using var allHeld = new CountdownEvent(IpcServer.MaxConnections);
+        using var release = new ManualResetEventSlim(false);
+        var handler = new EchoHandler
+        {
+            // Each held request signals that the server has accepted it and occupies a slot, then waits.
+            Override = _ =>
+            {
+                if (!allHeld.IsSet)
+                {
+                    allHeld.Signal();
+                }
+
+                release.Wait(TestContext.Current.CancellationToken);
+                return new IpcResponse(true);
+            },
+        };
+        using var server = CreateServer(dir.Paths, handler, clientTimeout: TimeSpan.FromSeconds(30));
         await server.StartAsync(TestContext.Current.CancellationToken);
-        var hogs = new List<Socket>();
+
+        var hogs = new List<Task>();
         for (var i = 0; i < IpcServer.MaxConnections; i++)
         {
-            hogs.Add(await ConnectRawAsync(dir.Paths));
+            hogs.Add(HoldConnectionUntilClosedAsync(dir.Paths));
         }
 
-        await Task.Delay(200, TestContext.Current.CancellationToken); // Let the server accept them all.
+        await Task.Run(() => allHeld.Wait(TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
         await Assert.ThrowsAsync<IOException>(() => StatusAsync(dir.Paths));
 
-        foreach (var hog in hogs)
-        {
-            hog.Dispose();
-        }
+        release.Set();
+        await Task.WhenAll(hogs); // Each hog returns when the server closed its connection, after freeing the slot.
 
-        await Task.Delay(200, TestContext.Current.CancellationToken);
         Assert.True((await StatusAsync(dir.Paths)).Ok);
         await server.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>Sends a status request and reads until the server closes the connection.</summary>
+    private static async Task HoldConnectionUntilClosedAsync(VigilPaths paths)
+    {
+        using var socket = await ConnectRawAsync(paths);
+        var request = JsonSerializer.SerializeToUtf8Bytes(new IpcRequest(IpcCommand.Status), VigilJsonContext.Default.IpcRequest);
+        await socket.SendAsync(request, TestContext.Current.CancellationToken);
+        await socket.SendAsync("\n"u8.ToArray(), TestContext.Current.CancellationToken);
+        var buffer = new byte[1024];
+        while (await socket.ReceiveAsync(buffer, TestContext.Current.CancellationToken) > 0)
+        {
+        }
     }
 
     [Fact]

@@ -35,6 +35,31 @@ public class ConfigurationTests
         Assert.Equal(InjectionStrategy.F15KeyUp, settings.MacOS.Strategy);
     }
 
+    [Fact]
+    public void Retention_days_default_to_30_and_are_bound_from_the_file()
+    {
+        using var dir = new TempDataDirectory();
+        Assert.Equal(30, VigilConfiguration.Load(dir.Paths.ConfigPath).Vigil.ActivityLog.RetentionDays);
+
+        dir.WriteConfig("""{ "Vigil": { "ActivityLog": { "RetentionDays": 7 } } }""");
+
+        Assert.Equal(7, VigilConfiguration.Load(dir.Paths.ConfigPath).Vigil.ActivityLog.RetentionDays);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(3651)]
+    public void LoadValidated_rejects_retention_days_outside_1_to_3650(int days)
+    {
+        using var dir = new TempDataDirectory();
+        dir.WriteConfig($$"""{ "Vigil": { "ActivityLog": { "RetentionDays": {{days}} } } }""");
+
+        var error = Assert.Throws<ConfigurationException>(() => VigilConfiguration.LoadValidated(dir.Paths.ConfigPath));
+
+        Assert.Contains("RetentionDays", error.Message, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("{ bad")]
     [InlineData("""{ "Vigil": { "Threshold": "not-a-time" } }""")]

@@ -82,6 +82,27 @@ public class DaemonHostTests
     }
 
     [Fact]
+    public async Task Daemon_start_deletes_expired_activity_logs_and_keeps_everything_else()
+    {
+        using var dir = new TempDataDirectory();
+        dir.WriteConfig("""{ "Vigil": { "ActivityLog": { "RetentionDays": 5 } } }""");
+        var expired = Path.Combine(dir.Paths.DataDirectory, "activity-2020-01-01.jsonl");
+        var unrelated = Path.Combine(dir.Paths.DataDirectory, "notes.txt");
+        var recent = dir.Paths.ActivityLogPath(DateOnly.FromDateTime(DateTime.Now));
+        File.WriteAllText(expired, "x");
+        File.WriteAllText(unrelated, "x");
+        File.WriteAllText(recent, "x");
+        using var host = Build(dir);
+
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        await host.StopAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(File.Exists(expired));
+        Assert.True(File.Exists(unrelated));
+        Assert.True(File.Exists(recent));
+    }
+
+    [Fact]
     public void Disabled_activity_log_writes_nothing()
     {
         using var dir = new TempDataDirectory();

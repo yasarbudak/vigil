@@ -15,6 +15,7 @@ public class VigilOptionsTests
         Assert.True(options.PauseOnLock);
         Assert.False(options.PauseOnBattery);
         Assert.True(options.ActivityLog.Enabled);
+        Assert.Equal(30, options.ActivityLog.RetentionDays);
         Assert.Null(options.Schedule.ActiveDays);
     }
 
@@ -28,6 +29,10 @@ public class VigilOptionsTests
         { "verify delay not shorter than poll", o => o.VerifyDelay = o.PollInterval },
         { "retry shorter than poll", o => o.DegradedRetryInterval = TimeSpan.FromSeconds(1) },
         { "empty active days", o => o.Schedule.ActiveDays = [] },
+        { "retention zero", o => o.ActivityLog.RetentionDays = 0 },
+        { "retention negative", o => o.ActivityLog.RetentionDays = -5 },
+        { "retention above maximum", o => o.ActivityLog.RetentionDays = 3651 },
+        { "null activity log", o => o.ActivityLog = null! },
     };
 
     [Theory]
@@ -38,5 +43,30 @@ public class VigilOptionsTests
         mutate(options);
 
         Assert.True(options.Validate().Count > 0, name);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(30)]
+    [InlineData(3650)]
+    public void Retention_days_inside_the_range_are_valid(int days)
+    {
+        var options = new VigilOptions();
+        options.ActivityLog.RetentionDays = days;
+
+        Assert.Empty(options.Validate());
+    }
+
+    [Fact]
+    public void Retention_error_names_the_setting_and_the_range()
+    {
+        var options = new VigilOptions();
+        options.ActivityLog.RetentionDays = 0;
+
+        var error = Assert.Single(options.Validate());
+
+        Assert.Contains("ActivityLog.RetentionDays", error, StringComparison.Ordinal);
+        Assert.Contains("1", error, StringComparison.Ordinal);
+        Assert.Contains("3650", error, StringComparison.Ordinal);
     }
 }

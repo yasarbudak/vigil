@@ -123,4 +123,8 @@ internal sealed class FakeActivityLog : IActivityLog
     public void Record(ActivityEntry entry) => Entries.Add(entry);
 
     public DailyTotals ReadTotals(DateOnly day) => Seed;
+
+    public void Prune(DateOnly today)
+    {
+    }
 }
