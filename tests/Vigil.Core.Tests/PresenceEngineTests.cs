@@ -162,6 +162,93 @@ public class PresenceEngineTests
     }
 
     [Fact]
+    public void Recovery_covers_nothing_when_the_previous_attempts_failed_and_the_user_never_returned()
+    {
+        var rig = new PresenceRig();
+        rig.Time.Advance(TimeSpan.FromMinutes(4));
+        rig.Engine.Evaluate(Idle(TimeSpan.FromMinutes(4)));
+        rig.Engine.RecordInjection(InjectionResult.Failure("blocked"), TimeSpan.FromMinutes(4));
+        var idle = rig.Options.Threshold;
+        for (var elapsed = TimeSpan.Zero; elapsed < TimeSpan.FromMinutes(20); elapsed += rig.Options.PollInterval)
+        {
+            rig.Time.Advance(rig.Options.PollInterval); // Polls every PollInterval, so the time is not mistaken for sleep.
+            idle += rig.Options.PollInterval;
+            rig.Engine.Evaluate(Idle(idle));
+        }
+
+        rig.Engine.RecordInjection(InjectionResult.Success, TimeSpan.Zero);
+
+        var entry = Assert.Single(rig.Log.Entries, e => e.Kind == ActivityKind.Injected);
+        Assert.Equal(TimeSpan.Zero, entry.Covered);
+        Assert.Equal(TimeSpan.Zero, rig.Status.CoveredToday);
+        Assert.Contains(rig.Log.Entries, e => e.Kind == ActivityKind.Recovered);
+    }
+
+    [Fact]
+    public void Verified_injection_after_a_recovery_covers_the_time_since_the_recovery()
+    {
+        var rig = new PresenceRig();
+        rig.Time.Advance(TimeSpan.FromMinutes(4));
+        rig.Engine.Evaluate(Idle(TimeSpan.FromMinutes(4)));
+        rig.Engine.RecordInjection(InjectionResult.Failure("blocked"), TimeSpan.FromMinutes(4));
+        rig.Time.Advance(TimeSpan.FromMinutes(1));
+        rig.Engine.Evaluate(Idle(TimeSpan.FromMinutes(5)));
+        rig.Engine.RecordInjection(InjectionResult.Success, TimeSpan.Zero);
+
+        // Polls every PollInterval, so the gap is not mistaken for sleep.
+        for (var idle = rig.Options.PollInterval; idle <= rig.Options.Threshold; idle += rig.Options.PollInterval)
+        {
+            rig.Time.Advance(rig.Options.PollInterval);
+            rig.Engine.Evaluate(Idle(idle));
+        }
+
+        rig.Engine.RecordInjection(InjectionResult.Success, TimeSpan.Zero);
+
+        Assert.Equal(TimeSpan.FromMinutes(4), rig.Status.CoveredToday);
+    }
+
+    [Fact]
+    public void An_unverified_injection_before_any_success_covers_nothing_even_without_degraded_history()
+    {
+        var rig = new PresenceRig();
+        rig.Time.Advance(TimeSpan.FromMinutes(4));
+        rig.Engine.Evaluate(Idle(TimeSpan.FromMinutes(4)));
+
+        rig.Engine.RecordInjection(InjectionResult.Success, TimeSpan.FromMinutes(4));
+
+        Assert.Equal(TimeSpan.Zero, rig.Status.CoveredToday);
+        Assert.DoesNotContain(rig.Log.Entries, e => e.Kind == ActivityKind.Injected);
+    }
+
+    [Fact]
+    public void Status_reports_whether_the_lock_state_could_be_read()
+    {
+        var rig = new PresenceRig();
+        Assert.Null(rig.Status.LockStateKnown);
+        Assert.True(rig.Status.PauseOnLock);
+
+        rig.Engine.Evaluate(new PresenceObservation(TimeSpan.Zero, null, false, true));
+        Assert.False(rig.Status.LockStateKnown);
+
+        rig.Engine.Evaluate(new PresenceObservation(TimeSpan.Zero, false, false, true));
+        Assert.True(rig.Status.LockStateKnown);
+
+        rig.Engine.Evaluate(new PresenceObservation(TimeSpan.Zero, true, false, true));
+        Assert.True(rig.Status.LockStateKnown);
+    }
+
+    [Fact]
+    public void Unknown_lock_state_keeps_injecting_even_when_PauseOnLock_is_enabled()
+    {
+        var rig = new PresenceRig();
+
+        var decision = rig.Engine.Evaluate(new PresenceObservation(TimeSpan.FromMinutes(4), null, false, true));
+
+        Assert.True(decision.ShouldInject);
+        Assert.Equal(PresenceState.Idle, decision.State);
+    }
+
+    [Fact]
     public void Constructor_rejects_invalid_options()
     {
         var options = new Options.VigilOptions { Threshold = TimeSpan.Zero };

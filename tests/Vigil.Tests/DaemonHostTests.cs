@@ -217,4 +217,82 @@ public class DaemonHostTests
             Assert.DoesNotContain(logs.Entries, e => e.Message.Contains("PauseOnLock", StringComparison.Ordinal));
         }
     }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "Timed out waiting for the condition.");
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+    }
+
+    [Fact]
+    public async Task Losing_and_regaining_lock_detection_while_running_is_logged_once_per_transition_and_shown_in_status()
+    {
+        using var dir = new TempDataDirectory();
+        dir.WriteConfig("""{ "Vigil": { "PollInterval": "00:00:00.050", "VerifyDelay": "00:00:00.010" } }""");
+        var logs = new CollectingLoggerProvider();
+        var platform = new TestPlatform { Locked = false };
+        var builder = DaemonHost.CreateBuilder(dir.Paths, platform.Factory);
+        builder.Logging.AddProvider(logs);
+        using var host = builder.Build();
+        await host.StartAsync(TestContext.Current.CancellationToken);
+
+        int Count(LogLevel level, string text)
+        {
+            lock (logs.Entries)
+            {
+                return logs.Entries.Count(e => e.Level == level && e.Message.Contains(text, StringComparison.Ordinal));
+            }
+        }
+
+        platform.Locked = null;
+        await WaitUntilAsync(() => Count(LogLevel.Warning, "PauseOnLock") == 1);
+        var unknown = await IpcClient.SendAsync(dir.Paths.SocketPath, new IpcRequest(IpcCommand.Status), TestContext.Current.CancellationToken);
+        Assert.True(unknown.Status!.PauseOnLock);
+        Assert.False(unknown.Status.LockStateKnown);
+
+        await Task.Delay(300, TestContext.Current.CancellationToken); // Several more polls while still unknown.
+        Assert.Equal(1, Count(LogLevel.Warning, "PauseOnLock"));
+
+        platform.Locked = false;
+        await WaitUntilAsync(() => Count(LogLevel.Information, "PauseOnLock is in effect") == 1);
+        var known = await IpcClient.SendAsync(dir.Paths.SocketPath, new IpcRequest(IpcCommand.Status), TestContext.Current.CancellationToken);
+        Assert.True(known.Status!.LockStateKnown);
+
+        await host.StopAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(1, Count(LogLevel.Warning, "PauseOnLock"));
+        Assert.Equal(1, Count(LogLevel.Information, "PauseOnLock is in effect"));
+    }
+
+    [Fact]
+    public async Task Unknown_lock_state_at_startup_is_warned_once_and_recovery_is_logged()
+    {
+        using var dir = new TempDataDirectory();
+        dir.WriteConfig("""{ "Vigil": { "PollInterval": "00:00:00.050", "VerifyDelay": "00:00:00.010" } }""");
+        var logs = new CollectingLoggerProvider();
+        var platform = new TestPlatform { Locked = null };
+        var builder = DaemonHost.CreateBuilder(dir.Paths, platform.Factory);
+        builder.Logging.AddProvider(logs);
+        using var host = builder.Build();
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
+
+        platform.Locked = true;
+        await WaitUntilAsync(() =>
+        {
+            lock (logs.Entries)
+            {
+                return logs.Entries.Any(e => e.Level == LogLevel.Information && e.Message.Contains("PauseOnLock is in effect", StringComparison.Ordinal));
+            }
+        });
+        await host.StopAsync(TestContext.Current.CancellationToken);
+
+        lock (logs.Entries)
+        {
+            Assert.Single(logs.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("PauseOnLock", StringComparison.Ordinal));
+        }
+    }
 }

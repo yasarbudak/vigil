@@ -349,4 +349,70 @@ public class PresenceCycleTests
         Assert.Equal(1, rig.Input.InjectCalls);
         Assert.InRange(rig.Status.CoveredToday, TimeSpan.Zero, rig.Options.Threshold);
     }
+
+    [Fact]
+    public async Task Recovery_after_a_degraded_stretch_does_not_count_the_degraded_time_as_covered()
+    {
+        var rig = new PresenceRig();
+        rig.Input.Works = false;
+        await rig.RunForAsync(TimeSpan.FromMinutes(14)); // Degraded from minute 4; the user never came back.
+        Assert.Equal(PresenceState.Degraded, rig.Status.State);
+        Assert.Equal(TimeSpan.Zero, rig.Status.CoveredToday);
+
+        rig.Input.Works = true;
+        await rig.RunForAsync(TimeSpan.FromMinutes(2));
+
+        Assert.Equal(PresenceState.Injected, rig.Status.State);
+        var recovery = Assert.Single(rig.Log.Entries, e => e.Kind == ActivityKind.Injected);
+        Assert.Equal(TimeSpan.Zero, recovery.Covered);
+        Assert.Equal(TimeSpan.Zero, rig.Status.CoveredToday);
+    }
+
+    [Fact]
+    public async Task Time_after_the_recovering_injection_is_counted_again()
+    {
+        var rig = new PresenceRig();
+        rig.Input.Works = false;
+        await rig.RunForAsync(TimeSpan.FromMinutes(14));
+        rig.Input.Works = true;
+        await rig.RunForAsync(TimeSpan.FromMinutes(2));
+        var recoveredAt = rig.Time.GetUtcNow();
+
+        await rig.RunForAsync(TimeSpan.FromMinutes(6));
+
+        var second = rig.Log.Entries.Where(e => e.Kind == ActivityKind.Injected).ElementAt(1);
+        Assert.InRange(second.Covered!.Value, rig.Options.Threshold - TimeSpan.FromMinutes(1), rig.Options.Threshold + TimeSpan.FromMinutes(1));
+        Assert.True(rig.Status.LastInjection > recoveredAt);
+    }
+
+    [Fact]
+    public async Task Time_with_a_missing_permission_is_not_counted_as_covered_after_it_is_granted()
+    {
+        var rig = new PresenceRig();
+        rig.Session.PermissionGranted = false;
+        await rig.RunForAsync(TimeSpan.FromMinutes(30));
+        Assert.Equal(DegradedReason.PermissionMissing, rig.Status.DegradedReason);
+
+        rig.Session.PermissionGranted = true;
+        await rig.RunForAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(PresenceState.Injected, rig.Status.State);
+        Assert.Equal(TimeSpan.Zero, rig.Status.CoveredToday);
+    }
+
+    [Fact]
+    public async Task Activity_after_a_failure_starts_a_fresh_stretch_that_is_counted_normally()
+    {
+        var rig = new PresenceRig();
+        rig.Input.Works = false;
+        await rig.RunForAsync(TimeSpan.FromMinutes(10)); // Degraded.
+
+        rig.Time.Advance(TimeSpan.FromSeconds(1)); // Strictly after the last failed attempt.
+        rig.Input.UserActivity();
+        rig.Input.Works = true;
+        await rig.RunForAsync(TimeSpan.FromMinutes(5)); // The user is idle again from the activity; injection after the threshold.
+
+        Assert.Equal(PresenceState.Injected, rig.Status.State);
+        Assert.InRange(rig.Status.CoveredToday, rig.Options.Threshold - TimeSpan.FromSeconds(10), rig.Options.Threshold + TimeSpan.FromSeconds(10));
+    }
 }
