@@ -82,6 +82,9 @@ internal sealed class FakeInput(ManualTimeProvider time) : IIdleSource, IInputIn
     /// <summary>The user touches the keyboard now.</summary>
     public void UserActivity() => _lastInput = time.GetUtcNow();
 
+    /// <summary>The user was last active <paramref name="idle"/> ago (before the current simulated time).</summary>
+    public void IdleFor(TimeSpan idle) => _lastInput = time.GetUtcNow() - idle;
+
     public InjectionResult Inject()
     {
         InjectCalls++;

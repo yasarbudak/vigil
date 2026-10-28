@@ -324,6 +324,20 @@ public class PresenceCycleTests
     }
 
     [Fact]
+    public async Task Time_idle_before_the_daemon_started_is_not_counted_as_covered()
+    {
+        var rig = new PresenceRig();
+        rig.Input.IdleFor(TimeSpan.FromMinutes(10));
+
+        await rig.PollAfterAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(1, rig.Input.InjectCalls);
+        var entry = Assert.Single(rig.Log.Entries, e => e.Kind == ActivityKind.Injected);
+        Assert.True(entry.Covered <= TimeSpan.FromSeconds(2), $"Covered {entry.Covered} exceeds the time since start.");
+        Assert.True(rig.Status.CoveredToday <= TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
     public async Task Time_while_the_machine_slept_is_not_counted_as_covered()
     {
         var rig = new PresenceRig();

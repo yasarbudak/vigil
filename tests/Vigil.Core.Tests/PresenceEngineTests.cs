@@ -136,12 +136,29 @@ public class PresenceEngineTests
     public void Verified_injection_is_logged_with_the_time_it_covered()
     {
         var rig = new PresenceRig();
+        rig.Time.Advance(TimeSpan.FromMinutes(4));
         rig.Engine.Evaluate(Idle(TimeSpan.FromMinutes(4)));
 
         rig.Engine.RecordInjection(InjectionResult.Success, TimeSpan.Zero);
 
         var entry = Assert.Single(rig.Log.Entries, e => e.Kind == ActivityKind.Injected);
         Assert.Equal(TimeSpan.FromMinutes(4), entry.Covered);
+    }
+
+    [Fact]
+    public void Time_idle_before_the_engine_started_is_not_counted_as_covered()
+    {
+        // Real case: the user had been idle for 10 minutes when the daemon started; the first injection came
+        // about one second later and was logged as covering 00:09:58.
+        var rig = new PresenceRig();
+        rig.Time.Advance(TimeSpan.FromSeconds(1));
+        rig.Engine.Evaluate(Idle(TimeSpan.FromMinutes(10)));
+
+        rig.Engine.RecordInjection(InjectionResult.Success, TimeSpan.Zero);
+
+        var entry = Assert.Single(rig.Log.Entries, e => e.Kind == ActivityKind.Injected);
+        Assert.True(entry.Covered <= TimeSpan.FromSeconds(1), $"Covered {entry.Covered} exceeds the time since start.");
+        Assert.Equal(TimeSpan.FromSeconds(1), rig.Status.CoveredToday);
     }
 
     [Fact]
