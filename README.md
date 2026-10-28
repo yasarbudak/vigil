@@ -13,9 +13,10 @@ It then injects one invisible input event and re-reads idle time to verify the c
 
 | Platform | Status |
 | --- | --- |
-| macOS (Intel and Apple silicon) | Phase 1: daemon and CLI. Tested on Intel (x86_64). |
+| macOS (Intel and Apple silicon) | Daemon, CLI and explicit autostart. Tested on Intel (x86_64); the arm64 package script is not yet run on Apple silicon. |
 | Windows, Linux | Planned. `vigil` exits with a clear "not supported yet" message. |
-| Tray UI, install/autostart | Planned, not part of Phase 1. |
+| Autostart (`vigil install`) | macOS only, explicit command. Other platforms: "not supported yet". |
+| Tray UI | Planned. |
 
 **Screen lock detection (macOS).** `PauseOnLock` (default `true`) works by polling the window server session
 dictionary (`CGSessionCopyCurrentDictionary`). The lock flag in it, `CGSSessionScreenIsLocked`, is a private key:
@@ -23,7 +24,10 @@ it is not in the public SDK headers (it is defined in Apple's open-source xnu as
 `kIOConsoleSessionScreenIsLockedKey`), so Apple could change it without notice. Vigil therefore never assumes
 "unlocked" when it cannot be sure: if the dictionary is unavailable or lacks the public session keys, the state is
 reported as unknown. A session that is not on the console (fast user switching) counts as locked. When the state is
-unknown, Vigil keeps injecting, logs a warning at daemon startup, and `vigil diag` shows `Screen locked: unknown`.
+unknown, Vigil keeps injecting (it never stops keeping you present because it cannot tell), and says so: it logs a
+warning at daemon startup, again when the state becomes unknown while running, and an info line when it becomes
+known again (once per change, not per poll). `vigil diag` shows `Screen locked: unknown` and `vigil status` shows
+`Screen lock: UNKNOWN ...` while it is unknown.
 
 ## Usage
 
@@ -35,9 +39,12 @@ vigil pause --until-tomorrow # until the start of tomorrow's schedule window (00
 vigil resume
 vigil diag                   # read-only report: platform, idle time, permission, lock/battery, config
 vigil permissions request    # macOS: ask for the permission Vigil needs (may show a system prompt)
+vigil install [--force]      # macOS: start Vigil at login (LaunchAgent); see "Autostart"
+vigil uninstall [--purge]    # macOS: stop Vigil and remove the LaunchAgent; --purge also deletes the data directory
 ```
 
-Vigil never starts itself. Run `vigil run` in a terminal, or wire it into a launcher of your own choosing.
+Vigil never starts itself. Run `vigil run` in a terminal, wire it into a launcher of your own choosing, or run
+`vigil install` once to have macOS start it at login. Nothing installs autostart unless you run that command.
 
 ### States
 
@@ -74,6 +81,45 @@ than that many days before today (with 30, today and the 30 days before it are k
 exactly that name in the data directory; other files, subdirectories and symbolic links are never touched.
 Set `VIGIL_DATA_DIR` to use a different data directory.
 
+## Autostart (macOS)
+
+`vigil install` is the only thing that ever creates an autostart entry, and only when you run it. It must be run
+from inside the app bundle, because macOS ties the permission to post input events to the app bundle (its
+identifier and code signature), not to a loose binary. Build the bundle with `scripts/package-macos.sh osx-x64`
+(or `osx-arm64`), copy `artifacts/<rid>/Vigil.app` where you want it to live (for example `~/Applications`), then:
+
+```
+/path/to/Vigil.app/Contents/MacOS/vigil install
+```
+
+What it does, and nothing else:
+
+- Writes `~/Library/LaunchAgents/io.github.yasarbudak.vigil.plist` (0644, written atomically). It starts
+  `<that app>/Contents/MacOS/vigil run` at login and restarts it only if it crashes (at most once every 30 s).
+  A deliberate exit, such as `config.json` being invalid (exit code 2), is not restarted, so there is no restart loop.
+- Creates the data directory and `vigil.log` in it (0600), which receives the daemon's output. Vigil does not rotate
+  this file; it only holds the daemon's state-change lines.
+- Loads the agent with `launchctl bootstrap gui/<your uid>`, so it also runs right away.
+
+`vigil install` refuses to run outside an app bundle, and refuses when an entry already exists that differs from
+what it would write (another app location, another data directory) unless you pass `--force`. Running it again
+from the same app with the same settings does nothing. If you move the app, run `vigil install --force` from the
+new location. If `VIGIL_DATA_DIR` is set when you install, the same value
+is stored in the plist so the daemon uses the same directory as your CLI.
+
+**Every rebuild changes the ad-hoc signature**, and macOS then treats the app as a new one: enable it again in
+System Settings, Privacy & Security, Accessibility (remove the old Vigil entry first if it is listed). Run
+`vigil diag` to check `Post events`.
+
+### Removing Vigil completely
+
+1. `/path/to/Vigil.app/Contents/MacOS/vigil uninstall --purge` stops the daemon, deletes the LaunchAgent plist and
+   deletes `~/Library/Application Support/Vigil`. Without `--purge` the data directory is kept. `--purge` deletes
+   only that default directory; if `VIGIL_DATA_DIR` points somewhere else it refuses and tells you so. Stop any
+   `vigil run` you started by hand first.
+2. Delete `Vigil.app`.
+3. Remove Vigil from System Settings, Privacy & Security, Accessibility.
+
 ## macOS permission
 
 Posting input events requires one permission, which Vigil checks silently (`vigil diag`) and requests only when
@@ -102,7 +148,9 @@ Vigil must be safe for anyone to run. These are guarantees of the code, not inte
 - No data leaves your machine. The activity log holds counters and timestamps only, no content, and lives in the
   single per-user directory and is deleted after `Vigil.ActivityLog.RetentionDays` days. Set
   `Vigil.ActivityLog.Enabled` to `false` to store nothing.
-- No silent persistence. It never installs autostart, LaunchAgents or login items. Phase 1 has no install command.
+- No silent persistence. It never installs autostart, LaunchAgents or login items on its own. The only way one is
+  created is you running `vigil install`; `vigil uninstall` removes it again. No other command, and no daemon or
+  update code path, touches `~/Library/LaunchAgents`.
 
 **Permissions requested**
 
