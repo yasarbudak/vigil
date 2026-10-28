@@ -4,4 +4,22 @@
          Must live in .targets so it runs after the SDK adds its implicit usings. -->
     <Using Remove="System.Net.Http" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- Test projects only: xunit.v3 references Microsoft.Testing.Extensions.Telemetry transitively, and its
+         package props register it with the test host through this hook item (GUID taken from
+         Microsoft.Testing.Extensions.Telemetry 2.5.1, buildMultiTargeting props). Removing the item keeps the
+         extension out of the generated SelfRegisteredExtensions, so the host never sends usage data,
+         whatever the environment. The guard target below fails the build if it ever comes back. -->
+    <TestingPlatformBuilderHook Remove="98058041-B5B6-4A75-9834-58E6DF796A22" />
+  </ItemGroup>
+
+  <Target Name="_VigilForbidTelemetryHook" BeforeTargets="BeforeCompile" Condition="'$(IsTestingPlatformApplication)' == 'true'">
+    <ItemGroup>
+      <_VigilTelemetryHook Include="@(TestingPlatformBuilderHook)"
+                           Condition="$([System.String]::Copy('%(DisplayName)').Contains('Telemetry'))" />
+    </ItemGroup>
+    <Error Condition="'@(_VigilTelemetryHook)' != ''"
+           Text="A Microsoft.Testing.Platform telemetry hook is registered (@(_VigilTelemetryHook->'%(DisplayName)')). Vigil guarantees no telemetry: see docs/DEVELOPER.md, rule 1." />
+  </Target>
 </Project>
