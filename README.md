@@ -57,7 +57,7 @@ file means defaults; an invalid file stops the daemon with a list of problems.
     "PauseOnLock": true,
     "PauseOnBattery": false,
     "Schedule": { "ActiveDays": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], "Start": "09:00", "End": "18:00" },
-    "ActivityLog": { "Enabled": true }
+    "ActivityLog": { "Enabled": true, "RetentionDays": 30 }
   },
   "MacOS": { "Strategy": "MouseNudge" }
 }
@@ -65,6 +65,10 @@ file means defaults; an invalid file stops the daemon with a list of problems.
 
 `Schedule` is optional (default: always). If `Start` is later than `End` the window crosses midnight and belongs
 to the day it starts on. `MacOS.Strategy` is `MouseNudge` (+1 px and back) or `F15KeyUp` (key-up of F15 only).
+`ActivityLog.RetentionDays` (default 30, allowed 1 to 3650) limits how long daily activity files are kept: at
+daemon start and after each midnight Vigil deletes its own `activity-yyyy-MM-dd.jsonl` files whose day is more
+than that many days before today (with 30, today and the 30 days before it are kept). It touches only files with
+exactly that name in the data directory; other files, subdirectories and symbolic links are never touched.
 Set `VIGIL_DATA_DIR` to use a different data directory.
 
 ## macOS permission
@@ -82,7 +86,8 @@ Vigil must be safe for anyone to run. These are guarantees of the code, not inte
 - Reads one number from the OS: how long since the last input event (idle time).
 - Posts one invisible input event when idle time reaches the threshold, then reads idle time again to verify.
 - Talks to its own CLI over a Unix domain socket in your user directory, readable and writable by you only.
-- Optionally keeps a daily counter file (number of injections, time covered) in the same directory.
+- Optionally keeps a daily counter file (number of injections, time covered) in the same directory, and deletes
+  its own daily files after `ActivityLog.RetentionDays` (default 30).
 
 **What Vigil never does**
 
@@ -92,7 +97,8 @@ Vigil must be safe for anyone to run. These are guarantees of the code, not inte
   not need, and never asks for, Input Monitoring or Screen Recording.
 - No elevated rights. It never needs root or administrator access and runs with your user rights in your session.
 - No data leaves your machine. The activity log holds counters and timestamps only, no content, and lives in the
-  single per-user directory. Set `Vigil.ActivityLog.Enabled` to `false` to store nothing.
+  single per-user directory and is deleted after `Vigil.ActivityLog.RetentionDays` days. Set
+  `Vigil.ActivityLog.Enabled` to `false` to store nothing.
 - No silent persistence. It never installs autostart, LaunchAgents or login items. Phase 1 has no install command.
 
 **Permissions requested**

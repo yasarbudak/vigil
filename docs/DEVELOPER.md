@@ -25,7 +25,8 @@ Layer responsibilities:
   the SDK header it was verified against. CoreFoundation objects are owned by `CFTypeHandle` (SafeHandle).
 - **Vigil** wires everything: `PlatformServices` (the only OS switch), `DaemonHost` (composition root),
   `PresenceWorker` (poll loop on `PeriodicTimer`), `IpcServer`/`IpcClient` (newline-delimited JSON over a Unix
-  domain socket), `VigilPaths` (the only place that knows file locations), `JsonlActivityLog`, commands.
+  domain socket), `VigilPaths` (the only place that knows file locations), `JsonlActivityLog` (with
+  `ActivityLogRetention` for the retention cleanup), commands.
 
 Single instance and IPC: `IpcServer` holds an exclusive lock on `vigil.sock.lock` for the daemon's lifetime. Only
 the lock holder may delete or recreate the socket, and a second daemon fails at the lock. The IPC server is
@@ -74,12 +75,27 @@ by the owner first.
 1. No network. Do not use or reference `System.Net.Http`, and add no sockets other than the local Unix domain
    socket. No update checks, no telemetry. `Directory.Build.targets` removes the `System.Net.Http` implicit using;
    `grep -rn "System.Net" src/` must show only `System.Net.Sockets` for the IPC socket.
+   Test projects too: xunit.v3 pulls in `Microsoft.Testing.Extensions.Telemetry`, which would send usage data
+   from the Microsoft Testing Platform test host. Microsoft documents only environment variables as the opt-out
+   (`TESTINGPLATFORM_TELEMETRY_OPTOUT=1` or `DOTNET_CLI_TELEMETRY_OPTOUT=1`,
+   https://learn.microsoft.com/dotnet/core/testing/microsoft-testing-platform-telemetry), which depend on each
+   developer's and CI's environment. So `Directory.Build.targets` removes the extension's
+   `TestingPlatformBuilderHook` item, the documented self-registration mechanism, so it is never compiled into
+   the test host's `SelfRegisteredExtensions`, and a guard target fails the build if a telemetry hook is
+   registered again (for example after an xunit upgrade changes the hook id). Check after upgrading xunit:
+   `dotnet test --project tests/Vigil.Core.Tests --diagnostic --diagnostic-output-directory <dir> --diagnostic-verbosity Trace`
+   and confirm the log says `Telemetry collector provider: '...NopTelemetryService'` and contains no
+   `Send telemetry event` line. The DLL is still restored and copied to the test output but is never loaded.
 2. Read nothing but the OS idle counter. No event taps, no keystroke, mouse, window-title or screen reading. On
    macOS only post-event access may be requested, never Input Monitoring or any listen-event API.
 3. Least privilege. Never require root or administrator rights.
 4. Data stays local. The activity log stores counters and timestamps only, never content, only in the per-user
    data directory (0700; files 0600), and must stay switchable via `ActivityLog.Enabled`. The IPC socket is
-   owner-only.
+   owner-only. Daily files are deleted after `ActivityLog.RetentionDays` (default 30, validated 1 to 3650) by
+   `JsonlActivityLog.Prune`, run by `ActivityLogRetention` at daemon start and at day rollover. Prune deletes
+   only regular files whose name `VigilPaths.TryParseActivityLogDay` accepts (`activity-yyyy-MM-dd.jsonl`) and
+   whose day is older than the cutoff; it never recurses, never follows or removes symbolic links, and never
+   touches any other file.
 5. No silent persistence. Never write LaunchAgents, login items, services or any autostart on the user's behalf
    without an explicit user command. Phase 1 has no install or uninstall.
 6. Add no NuGet package without the owner's approval; versions are pinned centrally in `Directory.Packages.props`.
