@@ -26,6 +26,13 @@ public sealed class PresenceEngine
     private DateTimeOffset? _lastAttempt;
     private bool _injectedSinceActivity;
 
+    // Latest moment at which Vigil failed to keep the user present: a failed or unverified injection, or an
+    // attempt blocked by a missing permission. Time up to the next verified injection is not covered.
+    private DateTimeOffset? _lastUnverifiedAt;
+
+    // Whether the last observation could tell if the screen is locked; null until the first observation.
+    private bool? _lockStateKnown;
+
     // Start of the current stretch in which Vigil has been continuously active (not paused, not suspended).
     // Set to the engine's creation time in the constructor, so nothing before the daemon started can ever be
     // counted as covered; null while paused until the next active evaluation sets it.
@@ -73,6 +80,7 @@ public sealed class PresenceEngine
             RollDayIfNeeded(local);
             ExpireManualPause(now, local);
             TrackRealActivity(now, observation.IdleTime);
+            _lockStateKnown = observation.IsScreenLocked is not null;
             var wasSuspended = _lastEvaluatedAt is { } previous && now - previous > MaxPollGap;
             _lastEvaluatedAt = now;
 
@@ -149,6 +157,16 @@ public sealed class PresenceEngine
             var coveredFrom = Max(
                 Max(_lastInjection ?? DateTimeOffset.MinValue, _lastRealActivity ?? now),
                 _activeSince ?? now);
+
+            // Only verified injections cover time. If Vigil failed since the user was last active and since the
+            // previous verified injection, nothing between that failure and this first verified injection was
+            // kept alive, so this injection covers nothing. Real activity after the failure starts a fresh
+            // stretch, which is counted as after any other activity.
+            if (_lastUnverifiedAt is { } unverified && unverified >= coveredFrom)
+            {
+                coveredFrom = now;
+            }
+
             var covered = now > coveredFrom ? now - coveredFrom : TimeSpan.Zero;
 
             _lastInjection = now;
@@ -236,7 +254,9 @@ public sealed class PresenceEngine
                 _lastInjection,
                 _injectionsToday,
                 _coveredToday,
-                now);
+                now,
+                _options.PauseOnLock,
+                _lockStateKnown);
         }
     }
 
@@ -299,6 +319,7 @@ public sealed class PresenceEngine
             _log.Record(new ActivityEntry(local, ActivityKind.Degraded, Detail: detail ?? reason.ToString()));
         }
 
+        _lastUnverifiedAt = _time.GetUtcNow();
         _degraded = reason;
         SettleState();
     }
