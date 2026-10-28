@@ -17,10 +17,13 @@ It then injects one invisible input event and re-reads idle time to verify the c
 | Windows, Linux | Planned. `vigil` exits with a clear "not supported yet" message. |
 | Tray UI, install/autostart | Planned, not part of Phase 1. |
 
-**Known limitation: `PauseOnLock` does nothing on macOS in Phase 1.** Vigil cannot detect a locked screen there
-(the required key is not in the public SDK headers), so it keeps injecting while the screen is locked even though
-`PauseOnLock` defaults to `true`. Vigil logs a warning at daemon startup, and `vigil diag` shows the same warning
-and reports the lock state as "unknown". Proper lock detection is a pending decision.
+**Screen lock detection (macOS).** `PauseOnLock` (default `true`) works by polling the window server session
+dictionary (`CGSessionCopyCurrentDictionary`). The lock flag in it, `CGSSessionScreenIsLocked`, is a private key:
+it is not in the public SDK headers (it is defined in Apple's open-source xnu as
+`kIOConsoleSessionScreenIsLockedKey`), so Apple could change it without notice. Vigil therefore never assumes
+"unlocked" when it cannot be sure: if the dictionary is unavailable or lacks the public session keys, the state is
+reported as unknown. A session that is not on the console (fast user switching) counts as locked. When the state is
+unknown, Vigil keeps injecting, logs a warning at daemon startup, and `vigil diag` shows `Screen locked: unknown`.
 
 ## Usage
 

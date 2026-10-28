@@ -41,7 +41,20 @@ raises `ConfigurationException`, which the commands print without a stack trace 
 Presence rules: a verified injection means idle time read after `VerifyDelay` is below `VerifyDelay` + 1 s.
 Otherwise the state becomes `Degraded` and is retried every `DegradedRetryInterval`. A later verified injection
 recovers automatically. Covered time excludes pauses, closed schedule windows, locked screens and suspend/sleep.
+Covered time is measured from the latest of the last real activity, the previous injection and the start of the
+current active stretch; the stretch starts when the engine is created (daemon start), so idle time before the daemon
+ran is never counted.
 Schedules are wall-clock windows, so DST transitions follow the clock on the wall (see `ScheduleDstTests`). Pause reasons are evaluated in the order manual, schedule, lock, battery.
+
+Screen lock on macOS: `MacOSSessionState.IsScreenLocked` reads `CGSessionCopyCurrentDictionary` and hands the
+three relevant values (public `kCGSSessionOnConsoleKey` and `kCGSessionLoginDoneKey`, private
+`CGSSessionScreenIsLocked`) to `SessionLockClassifier`, a pure function covered by `SessionLockClassifierTests`.
+The private key is defined in Apple's open-source xnu (`iokit/IOKit/IOKitKeysPrivate.h`,
+`kIOConsoleSessionScreenIsLockedKey`) and is not in the SDK headers, so the classifier returns unknown (`null`)
+whenever the dictionary does not contain a public session key or a value has an unexpected type, instead of
+reading a missing key as "unlocked". `StartupWarnings` warns only in that unknown case. The three key strings are
+created and released on each poll (Create rule), which avoids static native state at a negligible cost.
+Re-check the private key against new macOS releases; only the owner can test the locked state on a real machine.
 
 ## Build, test, publish
 
