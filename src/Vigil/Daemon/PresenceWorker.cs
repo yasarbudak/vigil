@@ -17,6 +17,9 @@ internal sealed class PresenceWorker(
     TimeProvider time,
     ILogger<PresenceWorker> logger) : BackgroundService
 {
+    // Seeded at startup, where the lock state is read once and reported by the startup warning below.
+    private LockDetectionMonitor _lockDetection = new(initiallyKnown: true);
+
     /// <summary>
     /// Logs the startup lines here, not in <see cref="ExecuteAsync"/>: since .NET 10 the host runs ExecuteAsync on a
     /// thread-pool thread after StartAsync has returned, so a quick stop could cancel it before it logged anything
@@ -31,7 +34,9 @@ internal sealed class PresenceWorker(
             options.PollInterval.TotalSeconds,
             options.Threshold.TotalSeconds);
 
-        if (StartupWarnings.LockDetection(options, platform.Session) is { } warning)
+        var lockState = platform.Session.IsScreenLocked();
+        _lockDetection = new LockDetectionMonitor(initiallyKnown: lockState is not null);
+        if (StartupWarnings.LockDetection(options, lockState) is { } warning)
         {
             logger.LogWarning("{Warning}", warning);
         }
@@ -53,6 +58,7 @@ internal sealed class PresenceWorker(
                 RunRetention();
                 await RunCycleAsync(stoppingToken).ConfigureAwait(false);
                 reported = ReportChange(reported);
+                ReportLockDetection();
             }
             while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false));
         }
@@ -85,6 +91,28 @@ internal sealed class PresenceWorker(
         {
             // One failed poll must not end the daemon; the next tick tries again.
             logger.LogError(ex, "Presence cycle failed.");
+        }
+    }
+
+    /// <summary>
+    /// The engine keeps injecting while the lock state is unknown (as at startup); this makes the loss and the
+    /// recovery visible, once per transition.
+    /// </summary>
+    private void ReportLockDetection()
+    {
+        if (!options.PauseOnLock || engine.GetStatus().LockStateKnown is not { } known)
+        {
+            return;
+        }
+
+        switch (_lockDetection.Observe(known))
+        {
+            case LockDetectionChange.Lost:
+                logger.LogWarning("{Warning}", StartupWarnings.LockDetectionLost);
+                break;
+            case LockDetectionChange.Restored:
+                logger.LogInformation("{Message}", StartupWarnings.LockDetectionRestored);
+                break;
         }
     }
 

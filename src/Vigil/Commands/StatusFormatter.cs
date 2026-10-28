@@ -12,7 +12,16 @@ internal static class StatusFormatter
         output.WriteLine($"Last injection:  {FormatPoint(status.LastInjection, status.At)}");
         output.WriteLine(
             $"Today:           {status.InjectionsToday} injections, {FormatDuration(status.CoveredToday)} covered");
+        output.WriteLine($"Screen lock:     {DescribeLockDetection(status)}");
     }
+
+    private static string DescribeLockDetection(PresenceStatus status) => (status.PauseOnLock, status.LockStateKnown) switch
+    {
+        (false, _) => "not used (PauseOnLock is off)",
+        (true, true) => "detected, pausing while locked",
+        (true, false) => "UNKNOWN: cannot tell if the screen is locked, NOT pausing while locked",
+        (true, null) => "not checked yet",
+    };
 
     private static string Describe(PresenceStatus status) => status.State switch
     {
