@@ -1,0 +1,7 @@
+<Project>
+  <ItemGroup>
+    <!-- Vigil makes no network calls; keep the HTTP namespace out of every project.
+         Must live in .targets so it runs after the SDK adds its implicit usings. -->
+    <Using Remove="System.Net.Http" />
+  </ItemGroup>
+</Project>
