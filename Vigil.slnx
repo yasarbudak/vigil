@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Vigil.Core/Vigil.Core.csproj" />
+    <Project Path="src/Vigil.Platform.MacOS/Vigil.Platform.MacOS.csproj" />
+    <Project Path="src/Vigil/Vigil.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Vigil.Core.Tests/Vigil.Core.Tests.csproj" />
+    <Project Path="tests/Vigil.Tests/Vigil.Tests.csproj" />
+  </Folder>
+</Solution>
