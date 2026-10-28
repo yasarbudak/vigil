@@ -40,9 +40,10 @@ internal static class DaemonHost
 
         services.AddSingleton<IActivityLog>(provider =>
             settings.Vigil.ActivityLog.Enabled
-                ? new JsonlActivityLog(paths, provider.GetRequiredService<ILogger<JsonlActivityLog>>())
+                ? new JsonlActivityLog(paths, settings.Vigil.ActivityLog, provider.GetRequiredService<ILogger<JsonlActivityLog>>())
                 : new NullActivityLog());
 
+        services.AddSingleton<ActivityLogRetention>();
         services.AddSingleton<PresenceEngine>();
         services.AddSingleton(provider =>
         {

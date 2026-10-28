@@ -10,4 +10,8 @@ internal sealed class NullActivityLog : IActivityLog
     }
 
     public DailyTotals ReadTotals(DateOnly day) => default;
+
+    public void Prune(DateOnly today)
+    {
+    }
 }

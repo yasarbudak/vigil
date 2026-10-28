@@ -70,6 +70,7 @@ internal static class DiagCommand
         output.WriteLine($"Pause on battery: {options.PauseOnBattery}");
         output.WriteLine($"Schedule:        {days}, {schedule.Start:HH:mm} to {schedule.End:HH:mm}");
         output.WriteLine($"Activity log:    {(options.ActivityLog.Enabled ? "enabled" : "disabled")}");
+        output.WriteLine($"Log retention:   {options.ActivityLog.RetentionDays} days");
         output.WriteLine($"macOS strategy:  {settings.MacOS.Strategy}");
     }
 

@@ -187,14 +187,12 @@ internal sealed class IpcServer : IHostedService, IDisposable
             return;
         }
 
-        var task = ServeAsync(client, stoppingToken);
+        // Task.Run: the synchronous part of serving (reading data that already arrived, running the handler) must
+        // never run on the accept loop, or one slow client or handler would stall accepting and the limit.
+        var task = Task.Run(() => ServeAndReleaseAsync(client, stoppingToken), CancellationToken.None);
         _clients[task] = 0;
         _ = task.ContinueWith(
-            finished =>
-            {
-                _clients.TryRemove(finished, out _);
-                _connectionSlots.Release();
-            },
+            finished => _clients.TryRemove(finished, out _),
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
@@ -212,6 +210,23 @@ internal sealed class IpcServer : IHostedService, IDisposable
         }
     }
 
+    /// <summary>
+    /// Frees the connection slot before the socket is closed, so a client that sees its connection end can rely on
+    /// the slot being available again.
+    /// </summary>
+    private async Task ServeAndReleaseAsync(Socket client, CancellationToken stoppingToken)
+    {
+        try
+        {
+            await ServeAsync(client, stoppingToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _connectionSlots.Release();
+            client.Dispose();
+        }
+    }
+
     /// <summary>Serves one client. Never throws: whatever goes wrong affects only this connection.</summary>
     private async Task ServeAsync(Socket client, CancellationToken stoppingToken)
     {
@@ -220,7 +235,7 @@ internal sealed class IpcServer : IHostedService, IDisposable
 
         try
         {
-            await using var stream = new NetworkStream(client, ownsSocket: true);
+            await using var stream = new NetworkStream(client, ownsSocket: false);
             var request = await ReadRequestAsync(stream, timeout.Token).ConfigureAwait(false);
             var response = request is null ? new IpcResponse(false, "Malformed request.") : Handle(request);
 

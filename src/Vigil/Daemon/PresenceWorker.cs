@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Vigil.Activity;
 using Vigil.Core.Options;
 using Vigil.Core.Presence;
 using Vigil.Platform;
@@ -10,12 +11,20 @@ namespace Vigil.Daemon;
 internal sealed class PresenceWorker(
     PresenceCycle cycle,
     PresenceEngine engine,
+    ActivityLogRetention retention,
     VigilOptions options,
     PlatformServices platform,
     TimeProvider time,
     ILogger<PresenceWorker> logger) : BackgroundService
 {
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    /// <summary>
+    /// Logs the startup lines here, not in <see cref="ExecuteAsync"/>: since .NET 10 the host runs ExecuteAsync on a
+    /// thread-pool thread after StartAsync has returned, so a quick stop could cancel it before it logged anything
+    /// and the lock-detection warning would be lost. StartAsync completes them before the host reports started.
+    /// The activity log cleanup due at daemon start runs here for the same reason; later runs (day rollover) stay
+    /// in the poll loop.
+    /// </summary>
+    public override Task StartAsync(CancellationToken cancellationToken)
     {
         logger.LogInformation(
             "Watching idle time every {Poll}s, acting at {Threshold}s idle.",
@@ -27,6 +36,13 @@ internal sealed class PresenceWorker(
             logger.LogWarning("{Warning}", warning);
         }
 
+        RunRetention();
+
+        return base.StartAsync(cancellationToken);
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
         using var timer = new PeriodicTimer(options.PollInterval, time);
         var reported = (State: (PresenceState?)null, Reason: (DegradedReason?)null);
 
@@ -34,6 +50,7 @@ internal sealed class PresenceWorker(
         {
             do
             {
+                RunRetention();
                 await RunCycleAsync(stoppingToken).ConfigureAwait(false);
                 reported = ReportChange(reported);
             }
@@ -42,6 +59,19 @@ internal sealed class PresenceWorker(
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
             // Normal shutdown.
+        }
+    }
+
+    private void RunRetention()
+    {
+        try
+        {
+            retention.RunIfDue();
+        }
+        catch (Exception ex)
+        {
+            // Housekeeping must never stop the daemon from doing its job.
+            logger.LogError(ex, "Activity log cleanup failed.");
         }
     }
 

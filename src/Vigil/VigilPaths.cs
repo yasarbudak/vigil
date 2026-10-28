@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Vigil;
 
 /// <summary>
@@ -15,7 +17,32 @@ internal sealed class VigilPaths(string dataDirectory)
 
     public string ConfigPath => Path.Combine(DataDirectory, "config.json");
 
-    public string ActivityLogPath(DateOnly day) => Path.Combine(DataDirectory, $"activity-{day:yyyy-MM-dd}.jsonl");
+    /// <summary>Search pattern that selects the daily activity log files in <see cref="DataDirectory"/>.</summary>
+    public const string ActivityLogSearchPattern = "activity-*.jsonl";
+
+    private const string ActivityLogPrefix = "activity-";
+    private const string ActivityLogSuffix = ".jsonl";
+    private const string ActivityLogDayFormat = "yyyy-MM-dd";
+
+    public string ActivityLogPath(DateOnly day) => Path.Combine(DataDirectory, $"{ActivityLogPrefix}{day.ToString(ActivityLogDayFormat, CultureInfo.InvariantCulture)}{ActivityLogSuffix}");
+
+    /// <summary>
+    /// Reads the day out of a file name written by <see cref="ActivityLogPath"/>. False for any other name,
+    /// so callers can tell Vigil's own files from everything else in the directory.
+    /// </summary>
+    public static bool TryParseActivityLogDay(string fileName, out DateOnly day)
+    {
+        day = default;
+        return fileName.StartsWith(ActivityLogPrefix, StringComparison.Ordinal)
+            && fileName.EndsWith(ActivityLogSuffix, StringComparison.Ordinal)
+            && fileName.Length > ActivityLogPrefix.Length + ActivityLogSuffix.Length
+            && DateOnly.TryParseExact(
+                fileName.AsSpan(ActivityLogPrefix.Length, fileName.Length - ActivityLogPrefix.Length - ActivityLogSuffix.Length),
+                ActivityLogDayFormat,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out day);
+    }
 
     public static VigilPaths ForCurrentUser()
     {
