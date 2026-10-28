@@ -54,6 +54,34 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.U1)]
     internal static unsafe partial bool CFStringGetCString(nint theString, byte* buffer, nint bufferSize, uint encoding);
 
+    // CFString.h: CFStringRef CFStringCreateWithCString(CFAllocatorRef, const char *cStr, CFStringEncoding) (Create rule: caller releases)
+    // CFBase.h: a NULL allocator means "use the default" (same as kCFAllocatorDefault).
+    [LibraryImport(CoreFoundation)]
+    internal static unsafe partial CFTypeHandle CFStringCreateWithCString(nint allocator, byte* cStr, uint encoding);
+
+    // CFDictionary.h: Boolean CFDictionaryGetValueIfPresent(CFDictionaryRef, const void *key, const void **value)
+    // The returned value follows the "Get" rule (owned by the dictionary, not released).
+    [LibraryImport(CoreFoundation)]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal static partial bool CFDictionaryGetValueIfPresent(CFTypeHandle dictionary, CFTypeHandle key, out nint value);
+
+    // CFBase.h: CFTypeID CFGetTypeID(CFTypeRef cf); CFTypeID is unsigned long (CFBase.h, non-LLP64)
+    [LibraryImport(CoreFoundation)]
+    internal static partial nuint CFGetTypeID(nint cf);
+
+    // CFNumber.h: CFTypeID CFBooleanGetTypeID(void)
+    [LibraryImport(CoreFoundation)]
+    internal static partial nuint CFBooleanGetTypeID();
+
+    // CFNumber.h: Boolean CFBooleanGetValue(CFBooleanRef)
+    [LibraryImport(CoreFoundation)]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal static partial bool CFBooleanGetValue(nint boolean);
+
+    // CGSession.h: CFDictionaryRef CGSessionCopyCurrentDictionary(void) (Copy rule: caller releases; NULL outside a GUI session)
+    [LibraryImport(CoreGraphics)]
+    internal static partial CFTypeHandle CGSessionCopyCurrentDictionary();
+
     // CGEventSource.h: CFTimeInterval CGEventSourceSecondsSinceLastEventType(CGEventSourceStateID, CGEventType)
     [LibraryImport(CoreGraphics)]
     internal static partial double CGEventSourceSecondsSinceLastEventType(int stateId, uint eventType);
