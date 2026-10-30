@@ -22,6 +22,10 @@ internal readonly record struct PlatformDetail(string Label, string Value);
 /// <param name="StartupProblem">When set, the daemon cannot work in this process and refuses to start with this message.</param>
 /// <param name="PermissionNotGrantedHint">The next step for the user after a permission request that was not granted.</param>
 /// <param name="Details">Extra read-only lines for <c>vigil diag</c>.</param>
+/// <param name="DaemonConsent">
+/// Set when the OS ties the consent to the process that asked (Linux, desktop portal): <c>vigil permissions request</c> then
+/// asks the running daemon to run it, and only the daemon ever does. Null everywhere else.
+/// </param>
 internal sealed record PlatformServices(
     string Name,
     IIdleSource Idle,
@@ -32,7 +36,8 @@ internal sealed record PlatformServices(
     string? Summary = null,
     string? StartupProblem = null,
     Func<string>? PermissionNotGrantedHint = null,
-    Func<IReadOnlyList<PlatformDetail>>? Details = null)
+    Func<IReadOnlyList<PlatformDetail>>? Details = null,
+    IConsentRequester? DaemonConsent = null)
 {
     /// <summary>What a macOS user does after a permission request that was not granted.</summary>
     internal const string MacOSNotGrantedHint =
@@ -101,6 +106,7 @@ internal sealed record PlatformServices(
             linux.Summary,
             linux.StartupProblem,
             linux.NotGrantedHint,
-            () => [.. linux.Diagnose().Select(d => new PlatformDetail(d.Label, d.Value))]);
+            () => [.. linux.Diagnose().Select(d => new PlatformDetail(d.Label, d.Value))],
+            linux.ConsentRequester);
     }
 }

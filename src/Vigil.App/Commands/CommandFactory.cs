@@ -97,8 +97,8 @@ internal static class CommandFactory
 
     private static Command Permissions(VigilPaths paths)
     {
-        var request = new Command("request", "Ask the OS for permission to post input events (macOS, and Wayland through the desktop portal; may show a system prompt). Windows and X11 need none.");
-        request.SetAction(_ => PermissionsCommand.Request(paths, Console.Out, Console.Error));
+        var request = new Command("request", "Ask the OS for permission to post input events (macOS, and Wayland through the desktop portal, which the running daemon asks for; may show a system prompt). Windows and X11 need none.");
+        request.SetAction((_, cancellationToken) => PermissionsCommand.RequestAsync(paths, Console.Out, Console.Error, cancellationToken: cancellationToken));
 
         var command = new Command("permissions", "Manage the OS permission Vigil needs.");
         command.Subcommands.Add(request);

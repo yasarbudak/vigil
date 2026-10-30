@@ -8,17 +8,17 @@ internal sealed class DaemonNotRunningException(string socketPath)
 
 internal static class IpcClient
 {
-    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
-
-    public static async Task<IpcResponse> SendAsync(string socketPath, IpcRequest request, CancellationToken cancellationToken)
+    /// <param name="timeout">How long to wait for the whole exchange; by default <see cref="IpcTimeouts.For"/> the command (5 seconds, except for the permission request).</param>
+    public static async Task<IpcResponse> SendAsync(string socketPath, IpcRequest request, CancellationToken cancellationToken, TimeSpan? timeout = null)
     {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(Timeout);
+        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource.CancelAfter(timeout ?? IpcTimeouts.For(request.Command));
+        var timeoutToken = timeoutSource.Token;
 
         using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         try
         {
-            await socket.ConnectAsync(new UnixDomainSocketEndPoint(socketPath), timeout.Token).ConfigureAwait(false);
+            await socket.ConnectAsync(new UnixDomainSocketEndPoint(socketPath), timeoutToken).ConfigureAwait(false);
         }
         catch (SocketException ex) when (ex.SocketErrorCode is SocketError.ConnectionRefused or SocketError.AddressNotAvailable)
         {
@@ -32,11 +32,11 @@ internal static class IpcClient
 
         await using var stream = new NetworkStream(socket, ownsSocket: false);
         var payload = JsonSerializer.SerializeToUtf8Bytes(request, VigilJsonContext.Default.IpcRequest);
-        await stream.WriteAsync(payload, timeout.Token).ConfigureAwait(false);
-        await stream.WriteAsync("\n"u8.ToArray(), timeout.Token).ConfigureAwait(false);
+        await stream.WriteAsync(payload, timeoutToken).ConfigureAwait(false);
+        await stream.WriteAsync("\n"u8.ToArray(), timeoutToken).ConfigureAwait(false);
 
         using var reader = new StreamReader(stream);
-        var line = await reader.ReadLineAsync(timeout.Token).ConfigureAwait(false)
+        var line = await reader.ReadLineAsync(timeoutToken).ConfigureAwait(false)
             ?? throw new IOException("The daemon closed the connection without a response.");
 
         return JsonSerializer.Deserialize(line, VigilJsonContext.Default.IpcResponse)

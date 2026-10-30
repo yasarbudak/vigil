@@ -29,8 +29,7 @@ internal sealed class IpcServer : IHostedService, IDisposable
     // sun_path is 104 bytes on macOS and 108 on Linux and Windows (afunix.h: UNIX_PATH_MAX 108, quoted in
     // dotnet/runtime UnixDomainSocketEndPoint.Windows.cs), so the same limit is safe on all three.
     private const int MaxSocketPathBytes = 100;
-    private static readonly TimeSpan DefaultClientTimeout = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan AcceptRetryDelay = TimeSpan.FromMilliseconds(250);
+        private static readonly TimeSpan AcceptRetryDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(5);
 
     private readonly string _socketPath;
@@ -49,7 +48,7 @@ internal sealed class IpcServer : IHostedService, IDisposable
         _socketPath = socketPath;
         _handler = handler;
         _logger = logger;
-        _clientTimeout = clientTimeout ?? DefaultClientTimeout;
+        _clientTimeout = clientTimeout ?? IpcTimeouts.Default;
     }
 
     private string LockPath => _socketPath + ".lock";
@@ -238,18 +237,44 @@ internal sealed class IpcServer : IHostedService, IDisposable
     /// <summary>Serves one client. Never throws: whatever goes wrong affects only this connection.</summary>
     private async Task ServeAsync(Socket client, CancellationToken stoppingToken)
     {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-        timeout.CancelAfter(_clientTimeout);
-
         try
         {
             await using var stream = new NetworkStream(client, ownsSocket: false);
-            var request = await ReadRequestAsync(stream, timeout.Token).ConfigureAwait(false);
-            var response = request is null ? new IpcResponse(false, "Malformed request.") : Handle(request);
 
+            // The time limit guards the two things a slow or hostile client controls: sending the request and reading the
+            // response. It does not run while the handler works, because a command that waits for a person (the permission
+            // request) legitimately takes minutes and its handler bounds the wait itself; a handler that blocks was never
+            // interrupted by this limit anyway.
+            IpcRequest? request;
+            using (var reading = CreateTimeLimit(stoppingToken))
+            {
+                request = await ReadRequestAsync(stream, reading.Token).ConfigureAwait(false);
+            }
+
+            IpcResponse response;
+            if (request is null)
+            {
+                response = new IpcResponse(false, "Malformed request.");
+            }
+            else if (IpcTimeouts.IsLongRunning(request.Command))
+            {
+                var answered = await HandleWatchingClientAsync(request, stream, stoppingToken).ConfigureAwait(false);
+                if (answered is null)
+                {
+                    return; // The client went away; the handler was cancelled and nobody is left to answer.
+                }
+
+                response = answered;
+            }
+            else
+            {
+                response = await HandleAsync(request, stoppingToken).ConfigureAwait(false);
+            }
+
+            using var writing = CreateTimeLimit(stoppingToken);
             var payload = JsonSerializer.SerializeToUtf8Bytes(response, VigilJsonContext.Default.IpcResponse);
-            await stream.WriteAsync(payload, timeout.Token).ConfigureAwait(false);
-            await stream.WriteAsync("\n"u8.ToArray(), timeout.Token).ConfigureAwait(false);
+            await stream.WriteAsync(payload, writing.Token).ConfigureAwait(false);
+            await stream.WriteAsync("\n"u8.ToArray(), writing.Token).ConfigureAwait(false);
 
             if (request is not null && response.Ok)
             {
@@ -278,11 +303,77 @@ internal sealed class IpcServer : IHostedService, IDisposable
         }
     }
 
-    private IpcResponse Handle(IpcRequest request)
+    /// <summary>
+    /// Runs a handler that waits for a person while watching the connection. The protocol is one request line then one response,
+    /// so the client sends nothing more; a read on the connection completes with zero bytes when the peer closed it
+    /// (<see cref="Socket.Receive(byte[])"/> documents this for a remote host that shut the connection down: the call "will complete
+    /// immediately and return zero bytes"), or fails when the connection broke. Either means the client is gone (Ctrl+C), and the
+    /// handler's token is cancelled, which makes the portal request close and frees the slot. A client that is still there never
+    /// completes the read, so nothing is read or lost; unexpected extra bytes are discarded.
+    /// </summary>
+    /// <returns>The response, or null when the client went away first.</returns>
+    private async Task<IpcResponse?> HandleWatchingClientAsync(IpcRequest request, NetworkStream stream, CancellationToken stoppingToken)
+    {
+        using var handling = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        var watching = WatchForDisconnectAsync(stream, handling);
+        try
+        {
+            return await HandleAsync(request, handling.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!stoppingToken.IsCancellationRequested && handling.IsCancellationRequested)
+        {
+            _logger.LogInformation("The client of IPC command {Command} went away; the request was cancelled.", request.Command);
+            return null;
+        }
+        finally
+        {
+            await handling.CancelAsync().ConfigureAwait(false); // ends the watch if the handler finished first
+            await watching.ConfigureAwait(false);
+        }
+    }
+
+    private static async Task WatchForDisconnectAsync(NetworkStream stream, CancellationTokenSource handling)
+    {
+        var buffer = new byte[64];
+        try
+        {
+            while (!handling.IsCancellationRequested)
+            {
+                var read = await stream.ReadAsync(buffer, handling.Token).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    break;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
+        {
+            // The connection broke: the client is gone as well.
+        }
+        catch (OperationCanceledException)
+        {
+            return; // The handler finished or the daemon is stopping: nothing to report.
+        }
+
+        await handling.CancelAsync().ConfigureAwait(false);
+    }
+
+    private CancellationTokenSource CreateTimeLimit(CancellationToken stoppingToken)
+    {
+        var limit = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        limit.CancelAfter(_clientTimeout);
+        return limit;
+    }
+
+    private async Task<IpcResponse> HandleAsync(IpcRequest request, CancellationToken cancellationToken)
     {
         try
         {
-            return _handler.Handle(request);
+            return await _handler.HandleAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw; // The daemon is stopping or the client went away; the caller decides, nothing to answer.
         }
         catch (Exception ex)
         {
