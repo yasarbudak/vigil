@@ -135,6 +135,15 @@ internal sealed class PortalClient(IDBusConnector connector, PortalTimeouts time
 
             return new PortalEstablishResult(PortalOutcome.Unavailable, ex.Message, TokenSent: tokenSent);
         }
+        catch (OperationCanceledException)
+        {
+            if (sessionPath is not null)
+            {
+                await CloseQuietlyAsync(connection, sessionPath).ConfigureAwait(false);
+            }
+
+            throw;
+        }
         finally
         {
             if (session is null)
@@ -228,6 +237,13 @@ internal sealed class PortalClient(IDBusConnector connector, PortalTimeouts time
             {
                 await CloseRequestQuietlyAsync(connection, actual).ConfigureAwait(false);
                 return null;
+            }
+            catch (OperationCanceledException)
+            {
+                // The caller gave up (the daemon is stopping, or the client of a permission request went away): close the
+                // request at the portal so that a dialog that is showing goes away, then let the cancellation travel on.
+                await CloseRequestQuietlyAsync(connection, actual).ConfigureAwait(false);
+                throw;
             }
         }
         finally

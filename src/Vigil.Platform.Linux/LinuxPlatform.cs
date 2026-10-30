@@ -12,6 +12,7 @@ namespace Vigil.Platform.Linux;
 /// <param name="StartupProblem">Set when the daemon can never work in this process (no graphical session in its environment); the daemon then refuses to start with this message.</param>
 /// <param name="NotGrantedHint">What to tell the user after the permission request returned false.</param>
 /// <param name="Diagnose">Lines for <c>vigil diag</c>. Read only: posts nothing, shows no prompt.</param>
+/// <param name="ConsentRequester">Set when the consent has to be requested by the daemon itself (the portal backend); null for X11 and uinput, which have nothing to ask.</param>
 public sealed record LinuxPlatformServices(
     string Summary,
     string? StartupProblem,
@@ -21,7 +22,8 @@ public sealed record LinuxPlatformServices(
     IPermissionProbe Permissions,
     IPermissionRequester PermissionRequester,
     Func<string> NotGrantedHint,
-    Func<IReadOnlyList<LinuxDetail>> Diagnose);
+    Func<IReadOnlyList<LinuxDetail>> Diagnose,
+    IConsentRequester? ConsentRequester = null);
 
 /// <summary>
 /// The one place where the session type and the configuration choose the Linux implementations. Idle time and lock state
@@ -69,7 +71,8 @@ public static class LinuxPlatform
             backend,
             backend,
             () => backend.NotGrantedHint,
-            () => Diagnose(options, detection, idleName, backend));
+            () => Diagnose(options, detection, idleName, backend),
+            backend as IConsentRequester);
     }
 
     [SupportedOSPlatform("linux")]
