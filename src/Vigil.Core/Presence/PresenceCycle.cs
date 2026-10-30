@@ -5,7 +5,8 @@ namespace Vigil.Core.Presence;
 
 /// <summary>
 /// One poll step: observe, decide, and when due inject, wait, re-read idle time and report the result.
-/// The host calls <see cref="RunOnceAsync"/> every <see cref="VigilOptions.PollInterval"/>.
+/// The host calls <see cref="RunOnceAsync"/> every <see cref="VigilOptions.PollInterval"/>. The verify delay is read from the
+/// engine's options at each injection, so a reconfigured engine (<see cref="PresenceEngine.Reconfigure"/>) is followed.
 /// </summary>
 public sealed class PresenceCycle
 {
@@ -15,7 +16,6 @@ public sealed class PresenceCycle
     private readonly ISessionState _session;
     private readonly IPermissionProbe _permission;
     private readonly TimeProvider _time;
-    private readonly TimeSpan _verifyDelay;
 
     public PresenceCycle(
         PresenceEngine engine,
@@ -23,8 +23,7 @@ public sealed class PresenceCycle
         IInputInjector injector,
         ISessionState session,
         IPermissionProbe permission,
-        TimeProvider time,
-        VigilOptions options)
+        TimeProvider time)
     {
         _engine = engine;
         _idle = idle;
@@ -32,7 +31,6 @@ public sealed class PresenceCycle
         _session = session;
         _permission = permission;
         _time = time;
-        _verifyDelay = options.VerifyDelay;
     }
 
     public async Task RunOnceAsync(CancellationToken cancellationToken)
@@ -51,7 +49,7 @@ public sealed class PresenceCycle
         var result = _injector.Inject();
         if (result.Posted)
         {
-            await Task.Delay(_verifyDelay, _time, cancellationToken).ConfigureAwait(false);
+            await Task.Delay(_engine.Options.VerifyDelay, _time, cancellationToken).ConfigureAwait(false);
         }
 
         _engine.RecordInjection(result, _idle.GetIdleTime());

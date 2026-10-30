@@ -13,7 +13,9 @@ public sealed class PresenceEngine
     internal static readonly TimeSpan VerifyTolerance = TimeSpan.FromSeconds(1);
 
     private readonly object _gate = new();
-    private readonly VigilOptions _options;
+
+    // Replaced as a whole by Reconfigure and never modified afterwards, so a reader sees one consistent set of options.
+    private volatile VigilOptions _options;
     private readonly TimeProvider _time;
     private readonly IActivityLog _log;
 
@@ -63,6 +65,30 @@ public sealed class PresenceEngine
         var totals = log.ReadTotals(_day);
         _injectionsToday = totals.Injections;
         _coveredToday = totals.Covered;
+    }
+
+    /// <summary>The options in force now. A caller that needs several values reads this once, so the values belong together.</summary>
+    public VigilOptions Options => _options;
+
+    /// <summary>
+    /// Replaces the options while the engine runs (the daemon's <c>ReloadConfig</c>). State, counters and a manual pause are kept;
+    /// the new rules apply from the next evaluation. The instance must not be changed after it is handed over.
+    /// </summary>
+    /// <exception cref="ArgumentException">The options are invalid; the engine keeps the old ones.</exception>
+    public void Reconfigure(VigilOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        var errors = options.Validate();
+        if (errors.Count > 0)
+        {
+            throw new ArgumentException("Invalid options: " + string.Join(" ", errors), nameof(options));
+        }
+
+        lock (_gate)
+        {
+            _options = options;
+        }
     }
 
     private TimeSpan VerifyBound => _options.VerifyDelay + VerifyTolerance;
