@@ -327,9 +327,12 @@ public class DaemonHostTests
         Assert.Null(applied.RestartRequired);
         await WaitUntilAsync(() => host.Services.GetRequiredService<PresenceEngine>().GetStatus().State == PresenceState.Watching);
 
+        // Over 2 s the old 300 ms interval allows at most 7 reads; the new 30 ms interval gives far more even with a
+        // coarse timer (about 15.6 ms on Windows) and a slow runner, so 20 separates the two without depending on timing.
         var readsBefore = platform.IdleReads;
-        await Task.Delay(600, TestContext.Current.CancellationToken);
-        Assert.True(platform.IdleReads - readsBefore > 8, "The poll loop did not take over the shorter interval.");
+        await Task.Delay(2000, TestContext.Current.CancellationToken);
+        var reads = platform.IdleReads - readsBefore;
+        Assert.True(reads >= 20, $"The poll loop did not take over the shorter interval: {reads} idle reads in 2 s.");
 
         await host.StopAsync(TestContext.Current.CancellationToken);
     }
