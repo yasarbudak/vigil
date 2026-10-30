@@ -27,13 +27,24 @@ Layer responsibilities:
 - **Vigil** wires everything: `PlatformServices` (the only OS switch), `DaemonHost` (composition root),
   `PresenceWorker` (poll loop on `PeriodicTimer`), `IpcServer`/`IpcClient` (newline-delimited JSON over a Unix
   domain socket), `VigilPaths` (the only place that knows file locations), `JsonlActivityLog` (with
-  `ActivityLogRetention` for the retention cleanup), `LaunchAgentManager` (install/uninstall), commands.
+  `ActivityLogRetention` for the retention cleanup), `Logging/` (the rotating `vigil.log`), `LaunchAgentManager`
+  (install/uninstall), commands.
 
 Single instance and IPC: `IpcServer` holds an exclusive lock on `vigil.sock.lock` for the daemon's lifetime. Only
 the lock holder may delete or recreate the socket, and a second daemon fails at the lock. The IPC server is
 registered before `PresenceWorker`, so a second daemon fails before anything can inject or write the activity log.
 The server also makes its directory 0700 itself before binding, serves clients concurrently (limit 8, 5 s
 timeout each), and never lets an accept or handler error end the loop.
+
+Logging: `RotatingFileLoggerProvider` (one `RotatingFileWriter` shared by all loggers) writes `vigil.log` in the
+console's single-line layout, next to the console logger. A line that would take the file over 1 MiB first moves it
+to `vigil.log.1` (replacing it); an oversized file found at start is rotated first. The writer holds a lock, flushes
+every line and never throws: an I/O failure drops the line and the file is reopened on the next write. The LaunchAgent
+sets no `StandardOutPath` or `StandardErrorPath`, because a second writer (launchd) on the same file would break
+rotation; stdout and stderr are discarded under launchd. So everything that ends a run must also reach the logger:
+`DaemonHost.RunAsync` logs the config error (exit 2), a failed start such as a second instance (exit 1), unexpected
+exceptions (an exception filter that does not catch) and `AppDomain.UnhandledException`. Native crashes are covered by
+macOS crash reports, not by this log. Tests: `RotatingFileLogTests`.
 
 Configuration: `VigilConfiguration` is the single place that reads and binds `config.json` (`Load`, `LoadValidated`).
 The daemon validates before building the host; `diag` and `permissions request` use the same loader. A bad file
@@ -109,8 +120,8 @@ verified in `man launchd.plist` and `man launchctl`:
 - An existing plist is never parsed: it is compared byte for byte with what `Render` produces for the current
   executable and environment. Identical means idempotent; anything else (including unreadable or binary content)
   needs `--force`. This keeps System.Xml out of the Native AOT binary (parsing cost about 3.4 MB, measured).
-- The plist is written to a temporary file next to the target, set to 0644 and renamed over it. The log file is
-  pre-created 0600 so launchd opens an existing private file.
+- The plist is written to a temporary file next to the target, set to 0644 and renamed over it. The plist has no
+  stdout/stderr paths (see Logging). `install` pre-creates `vigil.log` 0600 (and tightens an existing one).
 - `uninstall --purge` deletes only the default data directory (`VigilPaths.DefaultDirectory()`, named `Vigil`, not a
   symbolic link); a `VIGIL_DATA_DIR` override is never purged.
 - The label is also the bundle identifier; keep `LaunchAgentManager.Label` and the script's `BUNDLE_ID` equal.

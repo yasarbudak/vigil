@@ -81,6 +81,15 @@ than that many days before today (with 30, today and the 30 days before it are k
 exactly that name in the data directory; other files, subdirectories and symbolic links are never touched.
 Set `VIGIL_DATA_DIR` to use a different data directory.
 
+## Logs
+
+The daemon always writes its log to `vigil.log` in the data directory (macOS: `~/Library/Application Support/Vigil/`),
+whether started by `vigil run` or by the LaunchAgent; `vigil run` also prints to the terminal. The file is capped at
+1 MiB: when a line would go over, `vigil.log` becomes `vigil.log.1` (replacing the previous one) and a new
+`vigil.log` starts. At most one backup is kept, so logs use about 2 MiB of disk. A `vigil.log` that is already
+over the cap at daemon start is rotated first. Both files are 0600. Startup errors (such as an invalid
+`config.json`) and unhandled exceptions are written there too. Follow it with `tail -f vigil.log`.
+
 ## Autostart (macOS)
 
 `vigil install` is the only thing that ever creates an autostart entry, and only when you run it. It must be run
@@ -97,8 +106,8 @@ What it does, and nothing else:
 - Writes `~/Library/LaunchAgents/io.github.yasarbudak.vigil.plist` (0644, written atomically). It starts
   `<that app>/Contents/MacOS/vigil run` at login and restarts it only if it crashes (at most once every 30 s).
   A deliberate exit, such as `config.json` being invalid (exit code 2), is not restarted, so there is no restart loop.
-- Creates the data directory and `vigil.log` in it (0600), which receives the daemon's output. Vigil does not rotate
-  this file; it only holds the daemon's state-change lines.
+- Creates the data directory and `vigil.log` in it (0600). The daemon writes its log there itself, and launchd
+  discards stdout and stderr. See "Logs" below.
 - Loads the agent with `launchctl bootstrap gui/<your uid>`, so it also runs right away.
 
 `vigil install` refuses to run outside an app bundle, and refuses when an entry already exists that differs from
