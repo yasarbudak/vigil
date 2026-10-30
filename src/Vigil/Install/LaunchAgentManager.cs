@@ -41,7 +41,6 @@ internal sealed class LaunchAgentManager(
         var spec = new LaunchAgentSpec(
             Label,
             executablePath!,
-            paths.LogPath,
             Label,
             Path.GetFullPath(paths.DataDirectory) == Path.GetFullPath(defaultDataDirectory) ? null : Path.GetFullPath(paths.DataDirectory));
         var desired = LaunchAgentPlist.Render(spec);
@@ -158,7 +157,7 @@ internal sealed class LaunchAgentManager(
         return 0;
     }
 
-    /// <summary>Creates the data directory (0700) and the log file (0600) so launchd opens an existing private file.</summary>
+    /// <summary>Creates the data directory (0700) and makes sure the log file exists and is 0600 before the daemon first appends to it.</summary>
     private void PrepareLog()
     {
         paths.EnsureDataDirectory();

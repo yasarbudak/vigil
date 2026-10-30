@@ -4,20 +4,20 @@ namespace Vigil.Platform.MacOS.LaunchAgent;
 
 /// <param name="Label">launchd job label; also the plist file name without extension.</param>
 /// <param name="ExecutablePath">Absolute path of the executable inside the app bundle.</param>
-/// <param name="LogPath">Receives the job's stdout and stderr.</param>
 /// <param name="BundleIdentifier">Shown in System Settings > Login Items as the owner of the job.</param>
 /// <param name="DataDirectoryOverride">Set only when the user chose a non-default data directory; passed on to the daemon.</param>
 public sealed record LaunchAgentSpec(
     string Label,
     string ExecutablePath,
-    string LogPath,
     string BundleIdentifier,
     string? DataDirectoryOverride = null);
 
 /// <summary>
 /// Builds the per-user LaunchAgent property list. Pure: no file or launchctl access. It is deliberately write-only:
 /// an existing file is compared byte for byte with what <see cref="Render"/> produces, so no XML parser is needed.
-/// Key semantics are from <c>man launchd.plist</c>.
+/// Key semantics are from <c>man launchd.plist</c>. There is no <c>StandardOutPath</c> or <c>StandardErrorPath</c>:
+/// launchd then discards stdout and stderr, and the daemon writes and rotates its own <c>vigil.log</c>
+/// (two writers on one file would break the rotation).
 /// </summary>
 public static class LaunchAgentPlist
 {
@@ -38,7 +38,6 @@ public static class LaunchAgentPlist
     {
         ArgumentNullException.ThrowIfNull(spec);
         RequireAbsolute(spec.ExecutablePath, nameof(spec.ExecutablePath));
-        RequireAbsolute(spec.LogPath, nameof(spec.LogPath));
         RequireText(spec.Label, nameof(spec.Label));
         RequireText(spec.BundleIdentifier, nameof(spec.BundleIdentifier));
 
@@ -66,8 +65,6 @@ public static class LaunchAgentPlist
         xml.Append("\t</dict>\n");
         xml.Append("\t<key>ThrottleInterval</key>\n");
         xml.Append("\t<integer>").Append(ThrottleIntervalSeconds).Append("</integer>\n");
-        AppendString(xml, "StandardOutPath", spec.LogPath);
-        AppendString(xml, "StandardErrorPath", spec.LogPath);
         if (spec.DataDirectoryOverride is { } dataDirectory)
         {
             RequireAbsolute(dataDirectory, nameof(spec.DataDirectoryOverride));
