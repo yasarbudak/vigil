@@ -17,11 +17,16 @@ src/Vigil.Platform.Linux    Linux implementations: X11 (libX11, libXss, libXtst,
                             GNOME idle monitor and logind over D-Bus (the one NuGet package, Tmds.DBus.Protocol, used in
                             one file), uinput, sysfs battery, the systemd user unit and `ISystemctl`
 src/Vigil.App               the application: CLI, daemon host, IPC, config, activity log, install, platform
-                            composition. A library; its entry points are `VigilApplication.RunCliAsync/RunDaemonAsync`
+                            composition. A library; its entry points are `VigilApplication.RunCliAsync/RunDaemonAsync`.
+                            `Tray/` holds the tray's logic without any UI library (models, IPC client, settings store, tests
+                            need no Avalonia); `vigil-tray` sees it through `InternalsVisibleTo`
 src/Vigil                   `vigil` (macOS and Linux binary, `vigil.exe` on Windows): console head over Vigil.App, all commands
 src/Vigild                  `vigild.exe`: windowless (WinExe) head over Vigil.App that only runs the daemon (Windows)
+src/Vigil.Tray              `vigil-tray` (`vigil-tray.exe` on Windows, WinExe): the tray icon, its menu and the settings window,
+                            written with Avalonia in code (no XAML, no bindings). The only project that references Avalonia;
+                            it holds placement only, every decision is in `src/Vigil.App/Tray`
 tests/Vigil.Core.Tests      engine, schedule, options, duration parser (hand-written fakes, no mocking library)
-tests/Vigil.Tests           app and platform layer: IPC server/client, activity log, config binding, daemon host with a
+tests/Vigil.Tests           app and platform layer (including the tray's logic): IPC server/client, activity log, config binding, config reload, settings store, daemon host with a
                             fake platform, Windows pure logic and install flow with a fake registry, Linux pure logic
                             (classifiers, D-Bus messages, the portal flow against a fake portal, unit rendering, install
                             flow with a fake systemctl)
@@ -83,7 +88,27 @@ macOS crash reports, not by this log. Tests: `RotatingFileLogTests`.
 
 Configuration: `VigilConfiguration` is the single place that reads and binds `config.json` (`Load`, `LoadValidated`).
 The daemon validates before building the host; `diag` and `permissions request` use the same loader. A bad file
-raises `ConfigurationException`, which the commands print without a stack trace (exit code 2).
+raises `ConfigurationException`, which the commands print without a stack trace (exit code 2). A wrong value type is reported
+with the binder's message for the key and the conversion error (`Failed to convert configuration value at 'Vigil:Threshold' ... String 'abc'
+was not recognized as a valid TimeSpan.`), so that the tray's window can show something that leads to the mistake.
+`LoadFromJson` binds text exactly as `Load` binds the file (same code path), which the tray uses to check what it is about to write.
+
+**Reloading** (`IpcCommand.ReloadConfig`, `Configuration/ConfigReloader`): the daemon used to read `config.json` once, at start, and
+copy values into objects it shared (the options record into the engine and the cycle, a `PeriodicTimer` interval, the activity log
+chosen by `Enabled`, platform options into the injectors). A reload re-reads it with `VigilConfiguration.LoadValidated` (the loader the
+start uses), and only a valid file is applied; an invalid one changes nothing and its message goes back in `IpcResponse.Error`. Applied in
+place: `PresenceEngine.Reconfigure` swaps the whole `VigilOptions` instance under the engine's lock (state, counters and a manual pause stay;
+the instance is never modified after the hand-over), `PresenceCycle` and `PresenceWorker` read `PresenceEngine.Options` at each poll
+(the worker sets `PeriodicTimer.Period` when `PollInterval` changed), `ReloadableActivityLog` forwards to a new implementation when
+`ActivityLog` changed (retention applies at the next scheduled prune, which stays once per day: a reload does not delete files), and the
+injection strategy of macOS and Windows (and Linux, see below) is assigned to the options object the injectors read at every injection.
+Not applied, reported in `IpcResponse.RestartRequired`: `Linux.Backend` (`LinuxPlatform.Create` builds the backend, a portal session or a
+uinput device, once) and `Linux.Strategy` while the running backend is `Uinput` (`UinputDevice` is created with the capabilities of one
+strategy; assigning the new one would make `Write` post an event the device does not declare, which the input core drops, so the
+injection would be "posted" and never verified). Those two keep their running value, so the daemon and what it reports stay consistent, and
+`config.json` has the new value for the next start. Why not restart the host in place: a failed rebuild would end the daemon, the portal
+session and the manual pause would be lost, and every new key would silently depend on the rebuild; the per-key list above is short and
+`ConfigReloaderTests` pins it. A key added later that the daemon copies at start must be added to the reloader or to the restart list.
 
 Presence rules: a verified injection means idle time read after `VerifyDelay` is below `VerifyDelay` + 1 s.
 Otherwise the state becomes `Degraded` and is retried every `DegradedRetryInterval`. A later verified injection
@@ -160,6 +185,15 @@ Workflows live in `.github/workflows` (the Linux jobs are described under "Packa
 `linux-arm64` on `ubuntu-24.04-arm`, and `ci.yml` starts both binaries once with `diag` and the session variables removed.
 The release job adds the two `tar.gz` files to `SHA256SUMS` and to the release.
 
+The macOS job no longer zips inline: `scripts/package-macos.sh` makes `Vigil-<version>-<rid>.zip` with `Vigil.app` and `Vigil Tray.app`
+side by side (and verifies both signatures after unpacking it), and both workflows upload that file. Each packaging job also checks,
+without starting anything, that the tray is in the package: on macOS the Info.plist keys that must never change
+(`CFBundleExecutable` `vigil` and the identifier of `Vigil.app`, the tray's own executable and libraries) and both signatures; on Linux
+that `vigil-tray` and the two libraries are in the folder and the tarball, are an ELF program, and which libraries they link to; on Windows
+that the zip holds `vigil-tray.exe` and its libraries (the script checks the PE subsystem). A runner has no desktop, so the GUI is never
+launched in CI; the logic behind it is covered by unit tests. `AVALONIA_TELEMETRY_OPTOUT` is set in both workflows next to the .NET one
+(see rule 1 for what actually guarantees it).
+
 Rules for these workflows: only official `actions/*` actions, each pinned to a full commit SHA with the version in a
 comment; `permissions: contents: read` at the top, `contents: write` only on the release job; `checkout` with
 `persist-credentials: false`; no secrets (the release job uses the automatic, per-run `github.token`); runner images
@@ -168,6 +202,72 @@ pinned by version (`ubuntu-24.04`, `windows-2025`, `macos-15`, `macos-15-intel`)
 (`gh api repos/actions/<name>/git/ref/tags/<tag>`; if the type is `tag`, resolve it through `git/tags/<sha>`) and
 change both the SHA and the comment. The runner labels are listed at
 https://docs.github.com/en/actions/reference/runners/github-hosted-runners; check them when an image is retired.
+
+## Tray (`src/Vigil.Tray`, `src/Vigil.App/Tray`)
+
+The tray is a thin client: it talks to the daemon only over the IPC socket (`Status`, `Pause`, `PauseUntilTomorrow`, `Resume`,
+`ReloadConfig`) and reads and writes `config.json`. It never posts input, never reads the idle time, requests no OS permission, has no
+network code, and never starts, installs or stops the daemon (rule 5). Everything it decides is in `Vigil.App/Tray` and is tested
+without Avalonia: `TrayModel` (a `DaemonReply` to icon, state line, today line, tooltip and which actions are possible; the wording is
+`StatusFormatter`'s), `TrayCommands` (menu entry to `IpcRequest`), `DaemonClient` (one request, every failure turned into a
+`DaemonReply`; the transport is a function so tests need no socket), `SettingsForm`/`SettingsStore`/`SettingsController` (the window's
+fields, the config file, save then reload) and `TrayInstanceLock`. `src/Vigil.Tray` only places them: `TrayApplication` (icon, menu,
+poll with a `DispatcherTimer`, 5 s, 2 s while the window is open), `SettingsWindow`, `TrayIconRenderer`.
+
+**Settings.** Values stay text in `SettingsForm` until `VigilConfiguration.LoadFromJsonValidated` has read them, so the parser and the rules are
+the daemon's and nothing is duplicated. `SettingsStore.Save` edits the file as a JSON tree (`System.Text.Json.Nodes`, which the Native AOT
+build can use for objects, arrays and primitives without reflection), because the loader ignores unknown keys and the window shows only
+some of the known ones: every key it does not own is written back unchanged, keys are matched without regard to case as the configuration
+system does (a duplicate would make the daemon refuse the file), "every day" is written as no `ActiveDays` key, and a file that is not a JSON
+object is never overwritten. The write is two passes of the loader: the text as typed (to get the loader's reading and its messages), then
+the loader's reading in the documentation's notation, which is validated once more and then written with `InstallFiles.WriteAtomically`
+(temporary file in the same directory, mode applied to it, rename; `InstallFiles.PrivateFileMode` is 0600 and is what the log uses too). Comments are
+lost (the loader accepts them, the writer cannot keep them). A blank value for a time is "not set", as in the file, so it saves the default.
+`SettingsStoreTests` covers the round trip, unknown keys, case, refusal and nothing written, the modes (Unix) and that a concurrent reader
+never sees a half-written file.
+
+**Icons.** `TrayIconRenderer` draws the five states with Avalonia's `RenderTargetBitmap` and `DrawingContext` into a 64 px bitmap, so there
+are no assets. macOS: black on transparent, marked with `MacOSProperties.SetIsTemplateIcon` (Avalonia's `TrayIcon` passes it to the native
+`NSImage.setTemplate`, `trayicon.mm` in Avalonia.Native), so the menu bar tints it. Elsewhere: a coloured disc with a white shape. The
+shapes differ per state, so colour is not the only signal. The drawing could not be unit tested (no GUI automation); it was looked at once through
+Avalonia.Headless in a scratch project outside the repository, which is not a dependency of the solution.
+
+**Avalonia, what was checked (12.1.4, the latest stable on nuget.org on 2026-10-30; MIT).** Packages added: `Avalonia` (the framework the code is
+written against), `Avalonia.Desktop` (`UsePlatformDetect`: the macOS native backend, Win32 and X11, with Skia and HarfBuzz) and
+`Avalonia.Themes.Fluent` (the window's controls have no look without a theme). Nothing else is referenced: no Inter font (the system
+font is used), no diagnostics, no MVVM or reactive package. Transitive, from the restore of `src/Vigil.Tray` (all 12.1.4 unless named):
+Avalonia.Native, Avalonia.Win32 (with Avalonia.Angle.Windows.Natives 2.1.27548.20260419), Avalonia.X11 (with Avalonia.FreeDesktop and
+Avalonia.FreeDesktop.AtSpi), Avalonia.Skia, Avalonia.HarfBuzz, Avalonia.Remote.Protocol, Avalonia.BuildServices 11.3.2, MicroCom.Runtime 0.11.6,
+SkiaSharp 3.119.4 and HarfBuzzSharp 8.3.1.3 with their NativeAssets packages for macOS, Linux, Windows and WebAssembly (the build
+copies only the files of the target RID; the WebAssembly assets are never used), and Tmds.DBus.Protocol, which resolves to Vigil's 0.95.2 for
+Avalonia.FreeDesktop although it was built against 0.94.1: every one of the 197 member references from Avalonia.FreeDesktop, .AtSpi and
+.X11 to that assembly exists with the same signature in 0.95.2 (checked by reading the metadata of both; behaviour is not checked). To
+re-check after an upgrade: restore, then compare the member references of those three assemblies with the Tmds assembly in use.
+Native AOT: the Avalonia documentation ("Native AOT", docs.avaloniaui.net/docs/deployment/native-aot, last updated May 2026) says to set
+`PublishAot` and `IsAotCompatible` and to compile XAML and bindings at build time; this project has no XAML and no bindings. It publishes for
+`osx-x64` with no warning (`TreatWarningsAsErrors` is on), and trimming analysis for linux-x64, linux-arm64, win-x64 and win-arm64
+(`-p:PublishAot=false -p:PublishTrimmed=true -p:SelfContained=true`) gives none either; the native compile of those four has not been run.
+`InvariantGlobalization` is on, like the other programs: Avalonia's documented Linux requirements list no ICU.
+
+*No network, no telemetry.* Run time: no Avalonia, Skia or HarfBuzz assembly of that version references `System.Net.Http`; the only ones
+that use `System.Net.Sockets` are Avalonia.FreeDesktop.AtSpi (Unix domain socket), Avalonia.Remote.Protocol and Avalonia.DesignerSupport (TCP, the
+design-time previewer; the macOS Native AOT tray contains none of their TCP or DNS types: no `TcpListener`, `TcpClient`, `Dns`), and a search of
+the library source (tag 12.1.4) and of its macOS native code for network types, URLs, update and telemetry names found nothing at run time.
+Build time: `Avalonia.BuildServices` is a transitive dependency of `Avalonia`; its target `AvaloniaStats` runs before `CoreCompile` and sends
+anonymous build statistics (the package's README lists them: hashed project name, output type, target framework, runtime identifier, Avalonia
+version, a machine identifier, operating system, development environment, CI detection) unless `AVALONIA_TELEMETRY_OPTOUT=1` is in the environment,
+and only while the property `UsedAvaloniaProducts` is not empty (the target's condition). `Directory.Build.targets` clears that property after
+Avalonia's props set it and has a guard target that fails the build if it is not empty, the same way the xunit telemetry hook is handled. After
+an Avalonia upgrade, check that `msbuild -pp` still shows the target conditioned on that property, and build once with
+`-p:UsedAvaloniaProducts=AvaloniaUI` to see the guard fail. (On the machine where this was developed the task ran once, before the guard
+existed, in a first build of an empty Avalonia project.)
+
+**Linux.** `UsePlatformDetect` on Linux is `UseX11` only (`AppBuilderDesktopExtensions`): the Wayland backend is a separate opt-in package
+that is not referenced, so on Wayland the tray needs XWayland. The tray icon is StatusNotifierItem over D-Bus (`DBusTrayIconImpl`), with the
+XEmbed tray as the fallback when there is no session bus connection. Required libraries per Avalonia's documentation: `libx11-6 libice6 libsm6
+libfontconfig1`; the X11 backend also loads libXi, libXrandr, libXcursor, libXext and libXfixes by name (`Avalonia.X11`), and `libSkiaSharp.so`
+links `libfontconfig.so.1` and glibc 2.27 (read from the file with `objdump`). `libgtk-3` is used by Avalonia only for native dialogs, which the
+tray does not open.
 
 ## Windows notes
 
@@ -212,12 +312,15 @@ the comment above it names; do the same for a new one, and do not write a signat
 ## Packaging and autostart (Windows)
 
 ```
-scripts/package-windows.ps1 win-x64      # or win-arm64; output: artifacts/<rid>/{vigil.exe,vigild.exe,Vigil-<version>-<rid>.zip}
+scripts/package-windows.ps1 win-x64      # or win-arm64; output: artifacts/<rid>/{vigil.exe,vigild.exe,tray/,Vigil-<version>-<rid>.zip}
 ```
 
-The script publishes `src/Vigil` and `src/Vigild` with Native AOT, checks that `vigil.exe` has the console subsystem and
-`vigild.exe` the Windows (no console) subsystem by reading the PE header, and zips both, plus the repo's `LICENSE`
-(the MIT license requires its notice in distributed copies), under a folder named `Vigil`.
+The script publishes `src/Vigil`, `src/Vigild` and `src/Vigil.Tray` with Native AOT, checks that `vigil.exe` has the console subsystem and
+`vigild.exe` and `vigil-tray.exe` the Windows (no console) subsystem by reading the PE header, and zips them, plus the repo's `LICENSE`
+(the MIT license requires its notice in distributed copies), under a folder named `Vigil`. The tray is not a single file: Skia, HarfBuzz and
+ANGLE come as `.dll` files (`libSkiaSharp.dll`, `libHarfBuzzSharp.dll`, `av_libglesv2.dll`) that it loads from its own folder, so it goes into
+`Vigil/tray/` with them (debug symbols left out), not next to `vigild.exe`, whose folder `vigil install` points the Run key at. The script
+has not been run on Windows by the person who wrote it (no PowerShell was available): it was reviewed, and CI is its first run.
 Nothing is signed. Native AOT can cross-compile between x64 and arm64 on Windows when the target's C++ build tools are
 installed (https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/cross-compile); the `windows-2025` image
 lists `Microsoft.VisualStudio.Component.VC.Tools.ARM64` and `.x86.x64`, so CI builds both `win-x64` and `win-arm64` there.
@@ -256,8 +359,17 @@ answering; tests use a fake or a real server with a fake handler). The rules mir
 ## Packaging and autostart (macOS)
 
 ```
-scripts/package-macos.sh osx-x64      # or osx-arm64; output: artifacts/<rid>/Vigil.app
+scripts/package-macos.sh osx-x64      # or osx-arm64; output: artifacts/<rid>/{Vigil.app,"Vigil Tray.app",Vigil-<version>-<rid>.zip}
 ```
+
+**Why the tray is a second bundle.** The Accessibility permission belongs to the bundle that posts the events, and the documented check
+(`open -n -o ... ~/Applications/Vigil.app --args diag`) runs the bundle's `CFBundleExecutable`, which must stay `vigil`. Putting `vigil-tray`
+inside `Vigil.app` would leave it without a launchable identity (opening the app starts `vigil`), would put about 37 MB (the tray program, 17 MB, and Avalonia's native libraries, 20 MB; osx-x64)
+into the bundle whose signature changes the permission, and would give the tray, which needs no permission, the identity that has one.
+`Vigil Tray.app` has its own identifier (`io.github.yasarbudak.vigil.tray`), `LSUIElement` (no Dock icon), and holds `vigil-tray` and the three
+Avalonia native libraries (`libAvaloniaNative`, `libSkiaSharp`, `libHarfBuzzSharp`, `.dylib`) next to it, where the Native AOT program finds
+them (it was started from this layout). Each library is signed ad hoc first, then the bundle; `codesign --verify --strict --deep` passes, and
+the script repeats it on the bundles unpacked from the zip. `Vigil.app` is built exactly as before.
 
 The script runs the Native AOT publish, assembles `Vigil.app` (`Contents/MacOS/vigil`, an `Info.plist` with
 `CFBundleIdentifier` `io.github.yasarbudak.vigil`, the version from `<Version>` in `Directory.Build.props`,
@@ -354,11 +466,12 @@ native declarations by layout tests, and the binary starts headless in CI.
 ## Packaging and autostart (Linux)
 
 ```
-scripts/package-linux.sh linux-x64      # or linux-arm64; output: artifacts/<rid>/{vigil,Vigil-<version>-<rid>.tar.gz}
+scripts/package-linux.sh linux-x64      # or linux-arm64; output: artifacts/<rid>/{vigil,tray/,Vigil-<version>-<rid>.tar.gz}
 ```
 
-The script publishes `src/Vigil` with Native AOT (needs `clang` and `zlib1g-dev`), prints the glibc version the binary asks for
-(`objdump -T`), and packs `vigil` and `LICENSE` under a folder named `Vigil` with owner 0 and sorted names. Native AOT cannot
+The script publishes `src/Vigil` and `src/Vigil.Tray` with Native AOT (needs `clang` and `zlib1g-dev`), prints the glibc version each binary
+asks for (`objdump -T`), and packs `vigil`, `tray/` (`vigil-tray`, `libSkiaSharp.so`, `libHarfBuzzSharp.so`, which the tray loads from its
+own folder) and `LICENSE` under a folder named `Vigil` with owner 0 and sorted names. Native AOT cannot
 cross-compile between operating systems, and cross-architecture on Linux needs a cross linker and the target's C runtime and
 zlib objects, which the .NET documentation says are steps that "may suffice ... although this is not documented or guaranteed"
 (https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/cross-compile). GitHub has a native Arm runner for public
@@ -366,7 +479,7 @@ repositories, `ubuntu-24.04-arm`
 (https://docs.github.com/en/actions/reference/runners/github-hosted-runners), so each architecture is built on its own runner and
 the script refuses to build for the other one. `-latest` labels are not used, as for the other jobs. The script has been
 syntax-checked and its guards run, but its build and packing steps have only been exercised in CI (never on the maintainer's
-machine).
+machine); the tray part has not been run at all yet (the publish of the tray for the four non-macOS runtime identifiers was only trim-analysed).
 
 `vigil install` / `vigil uninstall` on Linux are implemented by `Install/SystemdUnitManager` on top of `SystemdUserUnit` (pure,
 write-only rendering) and `ISystemctl` (`Systemctl` runs `systemctl --user`; tests use a fake and never call it). The rules mirror
@@ -418,6 +531,10 @@ by the owner first.
    `dotnet test --project tests/Vigil.Core.Tests --diagnostic --diagnostic-output-directory <dir> --diagnostic-verbosity Trace`
    and confirm the log says `Telemetry collector provider: '...NopTelemetryService'` and contains no
    `Send telemetry event` line. The DLL is still restored and copied to the test output but is never loaded.
+   The tray's UI library has one build-time data collector of the same kind: `Avalonia.BuildServices` (see "Tray"). `Directory.Build.targets`
+   empties `UsedAvaloniaProducts`, which that target is conditioned on, and fails the build if it is not empty. A tray built by this
+   repository sends nothing at build time or run time, and uses no network: Avalonia, Skia and HarfBuzz reference no HTTP type, and the macOS
+   Native AOT binary holds no TCP or DNS type.
 2. Read nothing but the OS idle counter. No event taps, no keystroke, mouse, window-title or screen reading. On
    macOS only post-event access may be requested, never Input Monitoring or any listen-event API. On Windows no
    `SetWindowsHookEx`, no raw input registration, no `GetAsyncKeyState`; the only reads are `GetLastInputInfo`,
@@ -441,10 +558,18 @@ by the owner first.
 5. No silent persistence. Never write LaunchAgents, Run keys, login items, services or any autostart on the user's
    behalf without an explicit user command. The only such command is `vigil install` (macOS, Windows, Linux), removed by
    `vigil uninstall`; `AutostartCommand` is the only caller of `LaunchAgentManager`, `RunKeyManager` and `SystemdUnitManager`, and
-   `RunKey` is the only code that touches the registry. No daemon, status, diag or update path may call them. Tests never
+   `RunKey` is the only code that touches the registry. No daemon, status, diag or update path may call them, and neither may the tray:
+   it adds no login item, Run value, LaunchAgent or unit, and never starts the daemon; its autostart is something the user sets up by hand. Tests never
    write the real Run key, never call the real `launchctl` or `systemctl`, and never touch `~/.config`.
-6. Add no NuGet package without the owner's approval; versions are pinned centrally in `Directory.Packages.props`. The one
+6. Add no NuGet package without the owner's approval; versions are pinned centrally in `Directory.Packages.props`. Approved for the tray,
+   referenced only by `Vigil.Tray`: Avalonia, Avalonia.Desktop and Avalonia.Themes.Fluent 12.1.4 (MIT; see "Tray" for the check of what
+   they bring). Their dependencies are not referenced directly. The one
    approved for Linux is Tmds.DBus.Protocol 0.95.2 (MIT; the project documents it as NativeAOT and trimming compatible,
    https://github.com/tmds/Tmds.DBus/blob/main/docs/protocol.md); only `Vigil.Platform.Linux` references it, and it adds nothing
    to the macOS binary (the Linux branch is removed at compile time, the sizes were identical with and without it).
 7. No secrets in code, config or docs.
+8. Ship the licenses of what ships. `THIRD-PARTY-NOTICES.txt` at the repository root holds, unchanged and with the source of each text
+   named, the licenses of the third-party code in the binaries (the .NET runtime, Tmds.DBus.Protocol, Avalonia, MicroCom.Runtime, SkiaSharp
+   and HarfBuzzSharp with the native libraries' notices, ANGLE). The packaging scripts refuse to build without it and put it next to `LICENSE` in every
+   package, CI checks it is there, and the macOS script compares the copies inside the unpacked zip with the file. Add a package or upgrade
+   one: copy the new texts from the package or the tagged upstream source, never from memory, and update the section.

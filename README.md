@@ -13,8 +13,9 @@ instead of failing silently. It runs as a small background daemon controlled by 
 **Status:** macOS works today (verified on Intel; an Apple silicon build exists but has not been tested on
 hardware). Windows and Linux are implemented: they build and are unit-tested in CI, and CI also starts each Linux
 binary once on a headless runner to check that it reports the missing desktop cleanly. Neither has been verified on a
-real Windows machine or a real Linux desktop (X11 or Wayland) yet. A tray UI is planned. On other platforms `vigil` exits with a
-"not supported yet" message.
+real Windows machine or a real Linux desktop (X11 or Wayland) yet. A tray icon with a status and settings window comes with
+every package (see [Tray and settings window](#tray-and-settings-window)); it has not been verified on a real desktop of any
+of the three systems yet. On other platforms `vigil` exits with a "not supported yet" message.
 
 ## Contents
 
@@ -26,6 +27,7 @@ real Windows machine or a real Linux desktop (X11 or Wayland) yet. A tray UI is 
 - [Install on Windows](#install-on-windows)
 - [Install on Linux](#install-on-linux)
 - [CLI reference](#cli-reference)
+- [Tray and settings window](#tray-and-settings-window)
 - [Configuration](#configuration)
 - [Files Vigil creates](#files-vigil-creates)
 - [Logs](#logs)
@@ -157,11 +159,17 @@ Vigil must be safe for anyone to run. These are guarantees of the code, not inte
   session, and to nothing else.
 - Optionally keeps a daily counter file (number of injections, time covered) in the same directory, and deletes
   its own daily files after `ActivityLog.RetentionDays` (default 30).
+- The tray (`vigil-tray`, optional) is a client of the daemon, nothing more: it talks to it over the same local socket
+  (status, pause, resume, reload the configuration) and reads and writes `config.json` in the data directory when you press
+  Save in its window. It posts no input, reads no idle time and needs no permission of the operating system. Its one extra
+  file is the empty lock file `vigil-tray.lock`, which keeps a second tray icon from starting.
 
 **What Vigil never does**
 
 - No network. No HTTP client, no listening or outgoing network sockets, no update checks, no telemetry. The only
-  socket is the local Unix domain socket used by the CLI.
+  socket is the local Unix domain socket used by the CLI and the tray. The tray's UI library, Avalonia, is held to the same
+  rule: see [Verify it yourself](#privacy-and-trust) below for what was checked, and for the one thing it does at build time
+  that this repository switches off.
 - No reading of what you do. No event taps, no keystroke, mouse, window-title or screen reading. On macOS it does
   not need, and never asks for, Input Monitoring or Screen Recording. On Windows it installs no hooks
   (`SetWindowsHookEx`) and registers no raw input; it reads one value, the time of the last input event of its session.
@@ -175,7 +183,9 @@ Vigil must be safe for anyone to run. These are guarantees of the code, not inte
   single per-user directory and is deleted after `Vigil.ActivityLog.RetentionDays` days. Set
   `Vigil.ActivityLog.Enabled` to `false` to store nothing.
 - No silent persistence. It never installs autostart, LaunchAgents, Run keys, systemd units or login items on its own. The
-  only way one is created is you running `vigil install`; `vigil uninstall` removes it again. No other command, and no
+  only way one is created is you running `vigil install`; `vigil uninstall` removes it again. The tray starts and installs
+  nothing, not even the daemon, and it adds no login item of its own: how to start it at login is described under
+  [Tray and settings window](#tray-and-settings-window). No other command, and no
   daemon or update code path, touches `~/Library/LaunchAgents`, the Windows Run key or `~/.config/systemd/user`. The
   portal consent is the same: the dialog is only ever started by `vigil permissions request` (see below for the one
   caveat).
@@ -202,8 +212,23 @@ state shows `Degraded`.
 **Verify it yourself**
 
 - Networking: `grep -rn "System.Net" src/` should show only `System.Net.Sockets`, used for the local Unix domain
-  socket in `src/Vigil.App/Ipc`. `Directory.Build.targets` removes the `System.Net.Http` implicit using from every
-  project. The test projects also disable the test host's telemetry extension (see `docs/DEVELOPER.md`).
+  socket in `src/Vigil.App/Ipc` (and, on Linux, the local D-Bus socket). `Directory.Build.targets` removes the
+  `System.Net.Http` implicit using from every project. The test projects also disable the test host's telemetry extension
+  (see `docs/DEVELOPER.md`).
+- The tray's UI library: the three packages the tray references are `Avalonia`, `Avalonia.Desktop` and
+  `Avalonia.Themes.Fluent` (version 12.1.4, MIT), listed in `Directory.Packages.props`. Checked at that version: none of the
+  Avalonia, Skia or HarfBuzz assemblies references `System.Net.Http`; the only ones that use `System.Net.Sockets` are
+  `Avalonia.FreeDesktop.AtSpi` (a Unix domain socket to the accessibility bus), `Avalonia.Remote.Protocol` and
+  `Avalonia.DesignerSupport` (TCP, for the design-time previewer, which a running application does not start), and the
+  macOS Native AOT tray binary contains none of the TCP or DNS types. Avalonia has one data-collecting piece, at build time
+  only: the `Avalonia.BuildServices` package sends anonymous build statistics when a project that references Avalonia is
+  compiled, unless the environment variable `AVALONIA_TELEMETRY_OPTOUT=1` is set. Because an environment variable depends on
+  each machine, `Directory.Build.targets` clears the property that task is conditioned on, so it never runs, and fails the
+  build if that property is ever not empty. On Linux Avalonia's D-Bus code connects to the address in `DBUS_SESSION_BUS_ADDRESS`
+  as it is, without Vigil's `unix:`-only rule (Vigil's own D-Bus code refuses anything else); your desktop session sets a `unix:`
+  address, and that is the only bus the tray talks to. Nothing in the library collects data at run time, as far as its source
+  at that version shows (the search covered network types, URLs, update and telemetry names in the managed code and the macOS
+  native code); a built tray was started here only on macOS, with its data directory pointed at a temporary folder.
 - Permissions: the only macOS permission APIs used are `CGPreflightPostEventAccess` and `CGRequestPostEventAccess`
   (`src/Vigil.Platform.MacOS/MacOSPermissions.cs`). You can see what is granted under System Settings, Privacy &
   Security: Vigil should appear only under Accessibility.
@@ -252,13 +277,21 @@ scripts/package-linux.sh linux-x64    # Linux, Intel and AMD (on x86_64 Linux)
 scripts/package-linux.sh linux-arm64  # Linux on Arm (on aarch64 Linux)
 ```
 
-The macOS script publishes a Native AOT binary, assembles an app bundle, and signs it ad hoc. The result is
-`artifacts/<rid>/Vigil.app` (for example `artifacts/osx-x64/Vigil.app`). The Windows script publishes two Native AOT
-programs, `vigil.exe` (the console program, every command) and `vigild.exe` (the same daemon without a console window,
-which autostart runs), and zips them: `artifacts/<rid>/vigil.exe`, `artifacts/<rid>/vigild.exe` and
-`artifacts/<rid>/Vigil-<version>-<rid>.zip` (the zip also holds the `LICENSE` file, as `Vigil.app/Contents/Resources/LICENSE`
-does on macOS). The Linux script publishes one Native AOT program and packs it with the `LICENSE` file:
-`artifacts/<rid>/vigil` and `artifacts/<rid>/Vigil-<version>-<rid>.tar.gz`. They are not signed.
+Each script builds the tray too (`src/Vigil.Tray`, Avalonia, also Native AOT), so the first build downloads the Avalonia
+packages.
+
+The macOS script publishes Native AOT binaries, assembles two app bundles, and signs each ad hoc: `Vigil.app` (the daemon and
+the CLI) and `Vigil Tray.app` (the tray, with Avalonia's three native libraries next to its program), for example
+`artifacts/osx-x64/Vigil.app` and `artifacts/osx-x64/Vigil Tray.app`, and zips both side by side as
+`artifacts/<rid>/Vigil-<version>-<rid>.zip`. The tray is a bundle of its own so that `Vigil.app`, which holds the
+Accessibility permission, stays exactly what it was: the same executable name `vigil`, identifier and contents. The Windows
+script publishes three Native AOT programs, `vigil.exe` (the console program, every command), `vigild.exe` (the same daemon
+without a console window, which autostart runs) and `vigil-tray.exe` (the tray, which needs Avalonia's `.dll` files and so
+sits with them in a `tray` folder), and zips them: `artifacts/<rid>/vigil.exe`, `artifacts/<rid>/vigild.exe`,
+`artifacts/<rid>/tray/` and `artifacts/<rid>/Vigil-<version>-<rid>.zip` (the zip also holds the `LICENSE` file, as
+`Vigil.app/Contents/Resources/LICENSE` does on macOS). The Linux script publishes `vigil` and the tray and packs them with the
+`LICENSE` file: `artifacts/<rid>/vigil`, `artifacts/<rid>/tray/` (`vigil-tray` with `libSkiaSharp.so` and `libHarfBuzzSharp.so`)
+and `artifacts/<rid>/Vigil-<version>-<rid>.tar.gz`. They are not signed.
 
 ## Install on macOS
 
@@ -320,11 +353,24 @@ Vigil never starts itself. You can run `vigil run` in a terminal, or install the
 
    For convenience you can put that path on your `PATH` or alias it. The examples below write `vigil`.
 
+5. **Optional: the tray.** The zip also holds `Vigil Tray.app`, a menu bar icon with a status and settings window (see
+   [Tray and settings window](#tray-and-settings-window)). It needs no permission. Copy it next to Vigil and open it:
+
+   ```
+   ditto "artifacts/osx-x64/Vigil Tray.app" "$HOME/Applications/Vigil Tray.app"
+   open "$HOME/Applications/Vigil Tray.app"
+   ```
+
+   It is a separate app on purpose: it does not touch `Vigil.app`, its permission or its LaunchAgent. It shows no Dock icon.
+   To start it at login, add it yourself under System Settings, General, Login Items (Vigil never does that). The Avalonia
+   library the tray uses supports macOS 14 and later (its support policy puts macOS 13 and earlier in Tier 3, without free
+   support); the bundle itself declares macOS 12 like `Vigil.app`, and it has been run only on macOS 15 so far.
+
 ### Updating
 
 Every rebuild produces a new ad-hoc signature, and macOS then treats the app as a new one. After copying a new build
 to `~/Applications`, remove the old Vigil entry in System Settings, Privacy & Security, Accessibility, add Vigil
-again and switch it on. If the plist would change (for example you moved the app), run `vigil install --force` from
+again and switch it on (this concerns `Vigil.app` only; `Vigil Tray.app` has no permission, so replacing it asks for nothing). If the plist would change (for example you moved the app), run `vigil install --force` from
 the new location. Check with `vigil diag` (via the bundle, as above) that `Post events` is `granted`.
 
 ## Install on Windows
@@ -340,7 +386,8 @@ post its event.
 1. **Put the folder somewhere permanent.** Unzip the release (or take `artifacts/win-x64`) and move the folder with
    `vigil.exe` and `vigild.exe` to a place that stays, for example `%LOCALAPPDATA%\Programs\Vigil`. Keep the two
    programs together: `vigil install` points autostart at the `vigild.exe` next to `vigil.exe`. The Run key limits
-   the command line to 260 characters, so a very long folder path is refused with a message.
+   the command line to 260 characters, so a very long folder path is refused with a message. The zip also holds a `tray`
+   folder with `vigil-tray.exe` and its `.dll` files; keep that folder as it is, the program loads them from there.
 
 2. **Install autostart.** From that folder:
 
@@ -373,6 +420,11 @@ post its event.
    explained under [Screen lock detection (Windows)](#screen-lock-detection-windows)).
 
 Add the folder to your `PATH` if you want to type `vigil` instead of the full path; the examples below write `vigil`.
+
+**Optional: the tray.** Run `tray\vigil-tray.exe` for a notification area icon with a status and settings window (see
+[Tray and settings window](#tray-and-settings-window)). It needs no permission and no administrator rights. To start it at sign-in, press Win+R, run `shell:startup`
+and put a shortcut to `vigil-tray.exe` in that folder (Vigil never does that for you). Avalonia supports Windows 10 22H2 (x64)
+and Windows 11; the earlier Windows 10 builds that Vigil itself supports are outside what the library supports.
 
 ### Updating
 
@@ -480,6 +532,19 @@ unit once with `vigil install`. No step needs root, except the optional `uinput`
    journalctl --user -u vigil
    ```
 
+8. **Optional: the tray.** The tarball also holds `Vigil/tray/` with `vigil-tray` and the two libraries next to it (keep them
+   together; the program loads them from its own folder). Install the folder as a whole and start it from inside your session:
+
+   ```
+   cp -r Vigil/tray ~/.local/share/vigil-tray-app
+   ~/.local/share/vigil-tray-app/vigil-tray
+   ```
+
+   It needs no permission. It needs the packages `libx11-6 libice6 libsm6 libfontconfig1` (Debian and Ubuntu names; Avalonia's
+   list), an X11 display (`DISPLAY`: on a Wayland session the tray runs through XWayland, because the Avalonia package used here
+   only has the X11 backend), and a desktop that shows tray icons: see [Tray and settings window](#tray-and-settings-window).
+   To start it at login, add it to your desktop's startup applications (Vigil never does that for you).
+
 ### Updating
 
 Replace the binary, then run `vigil install --force` (it stops the running daemon, rewrites the unit and starts it again).
@@ -544,11 +609,66 @@ manual pause shows its end time, for example `Paused (until 10:15:00)`. `Screen 
 `detected, pausing while locked`, `UNKNOWN: cannot tell if the screen is locked, NOT pausing while locked`,
 `not used (PauseOnLock is off)` or `not checked yet`.
 
+## Tray and settings window
+
+`vigil-tray` is an optional program with an icon in the menu bar (macOS), the notification area (Windows) or the panel of your
+desktop (Linux), and a window with the status and the settings. The daemon works without it, and it needs the daemon only to
+show the status: it is a client that talks to the daemon over the local socket (the same one `vigil status` uses) and reads and
+writes `config.json`. It never posts input, never reads the idle time, needs no permission, uses no network, and never starts,
+installs or stops the daemon. It starts at login only if you set that up yourself (see the install sections above); Vigil
+installs no login item for it.
+
+**The icon** shows the state: a ring with a dot (`Watching`), a solid disc (`Injected`), two bars (`Paused`), an exclamation mark
+(`Degraded`) and a dashed ring (the daemon is not running). The icons are drawn by the program itself, so there are no image files
+and nothing from a third party. On macOS they are black template images that the menu bar tints for light and dark mode; on
+Windows and Linux each state is a coloured disc with a white shape, which reads on a dark or a light panel. The tooltip names the
+state like `vigil status` does, for example `Vigil: Paused (until 10:15:00)`.
+
+**The menu** shows the state line and `Today: N injections, X covered` (both worded as `vigil status` words them), then
+`Pause 15 minutes`, `Pause 1 hour`, `Pause until tomorrow` (the same commands as `vigil pause`), `Resume` (enabled while a manual
+pause is on; the schedule, lock and battery pauses end by themselves), `Open Vigil…` (the window) and `Quit tray`. **Quit tray
+closes only the tray: the Vigil daemon keeps running** (the menu item says so in its tooltip). When no daemon is running the
+icon is the dashed ring, the pause entries are disabled, and the window still opens, so you can edit the settings.
+
+**The window** shows what `vigil status` prints, refreshed every two seconds while the window is open, and the documented
+settings: `Threshold`, `PauseOnLock`, `PauseOnBattery`, the schedule (days, start, end), the activity log (`Enabled`,
+`RetentionDays`) and the injection strategy of this operating system. Save checks the values with the daemon's own loader before
+anything is written, so the rules and the messages are the daemon's (a bad value shows the same message `vigil diag` would show,
+and nothing is written). The file is written atomically (a finished temporary file is renamed over it) with mode 0600 on Unix.
+Keys the window does not show (`PollInterval`, `VerifyDelay`, `DegradedRetryInterval`, `Linux.Backend`, the sections of other
+operating systems, any key Vigil does not know) are kept as they are. Comments in the file are not kept, because the writer has
+no place for them. A file that is not valid JSON is never overwritten: the window says what is wrong and asks you to fix it.
+
+**Applying the settings.** After a successful save the tray asks the running daemon to read `config.json` again (the `ReloadConfig`
+IPC command). The daemon validates the file first; if it is not valid, it changes nothing and the window shows its error. If it is
+valid the daemon applies it without a restart: all `Vigil.*` keys (a new `PollInterval` once the current wait is over), the activity log
+(a shorter `RetentionDays` deletes old files at the next daemon start or at midnight, as always, not at once) and the strategy of
+this operating system. Two things cannot be taken over by a running daemon, and the window names them: `Linux.Backend` (the input
+backend is built once at start) and, on the `Uinput` backend, `Linux.Strategy` (the virtual device is made for one strategy). They
+are saved and apply after you restart the daemon. If the daemon is not running, the settings apply when it starts. `config.json`
+stays the only source of configuration.
+
+**Desktop requirements.**
+
+- macOS: nothing to set up. The icon appears in the menu bar. Avalonia supports macOS 14 and later.
+- Windows: nothing to set up. Windows 10 22H2 (x64) and Windows 11 are what Avalonia supports.
+- Linux: the tray uses the StatusNotifierItem D-Bus interface: it connects to the session bus, watches for
+  `org.kde.StatusNotifierWatcher` and shows its icon once a watcher exists. It falls back to the older XEmbed system tray only when
+  it cannot connect to the session bus at all (Avalonia's `DBusTrayIconImpl` and `X11Platform.CreateTrayIcon`). Avalonia's
+  documentation says the icon works on desktops with StatusNotifierItem or AppIndicator support (confirmed on Ubuntu) and that
+  "GNOME users may need the AppIndicator extension": plain GNOME shows no tray icons, so install and enable that extension, or the
+  icon does not appear. Which desktops show it has not been tried here.
+
+A tray that is already running is not started a second time (the lock file `vigil-tray.lock` in the data directory); the second
+start says so and exits.
+
 ## Configuration
 
 Vigil reads an optional `config.json` from the data directory (macOS: `~/Library/Application Support/Vigil/`, Windows:
 `%LOCALAPPDATA%\Vigil\`, Linux: `$XDG_DATA_HOME/vigil/`, by default `~/.local/share/vigil/`, or `$VIGIL_DATA_DIR/config.json`). A missing file means defaults. It is the only configuration source: environment
-variables and command-line options do not configure the daemon.
+variables and command-line options do not configure the daemon. The daemon reads it at start; to change it while the daemon runs,
+use the [tray's settings window](#tray-and-settings-window) (it saves the file and asks the daemon to reload it), or restart the
+daemon after editing the file by hand.
 
 Full example with every key at its default, except that `Schedule` is shown with a weekday window (without a
 `Schedule` section Vigil is active at all times):
@@ -645,9 +765,10 @@ All files live in one per-user data directory:
 | Path | Purpose | Unix mode | Windows |
 | --- | --- | --- | --- |
 | the data directory | Holds everything below. | 0700 | access rules of its parent |
-| `config.json` | Your optional configuration. Vigil never writes it. | as you create it | as you create it |
+| `config.json` | Your optional configuration. The daemon and the CLI never write it; only the tray's Save does (atomically, other keys kept). | as you create it, 0600 after a save from the tray | as you create it |
 | `vigil.sock` | Local Unix domain socket the CLI uses to talk to the daemon. | 0600 | access rules of the data directory |
 | `vigil.sock.lock` | Lock file that guarantees a single daemon instance. | 0600 | access rules of the data directory |
+| `vigil-tray.lock` | Empty lock file that keeps a second tray from starting. Created only when the tray runs. | 0600 | access rules of the data directory |
 | `activity-YYYY-MM-DD.jsonl` | Daily activity record: one JSON line per event with timestamps and counters, no content. Deleted after `RetentionDays`. Not written when `ActivityLog.Enabled` is `false`. | 0600 | access rules of the data directory |
 | `vigil.log`, `vigil.log.1` | Daemon log and its one backup. See [Logs](#logs). Not written when the daemon runs under systemd on Linux: the journal keeps the log. | 0600 | access rules of the data directory |
 | `portal-restore-token` | Linux Wayland only: the desktop portal's restore token, one line of letters and digits, saved by the daemon when you run `vigil permissions request`, and renewed each time the daemon starts a session (the portal's tokens are single use). It lets the daemon restart without showing the consent dialog. Deleted when the portal does not accept it. | 0600 | not used |
@@ -726,6 +847,9 @@ To remove Vigil completely:
 1. Run `vigil uninstall --purge` as above.
 2. macOS: delete `~/Applications/Vigil.app` and remove Vigil from System Settings, Privacy & Security, Accessibility.
    Windows: delete the folder with `vigil.exe` and `vigild.exe`. Linux: delete the `vigil` binary.
+3. If you use the tray: quit it (`Quit tray` in its menu), remove the login item or startup shortcut you added for it, and delete
+   `Vigil Tray.app` (macOS), the `tray` folder (Windows) or the folder you copied the tray to (Linux). `vigil uninstall` does
+   not stop or remove the tray, because it never started it.
 
 ## Troubleshooting
 
@@ -807,6 +931,18 @@ autostart mechanism.
 while the screen is locked means your desktop does not set the logind locked hint; see
 [Screen lock detection (Linux)](#screen-lock-detection-linux).
 
+**The tray shows a dashed ring and "Vigil is not running".** There is no daemon at the socket. The tray does not start it:
+run `vigil run` or `vigil install`. If the daemon runs and the tray still shows this, it is not using the same data directory:
+check that `VIGIL_DATA_DIR` is the same for both.
+
+**Linux: the tray has no icon.** Your desktop shows no tray icons. On GNOME install and enable the AppIndicator extension; on a
+window manager without a panel there is nothing to show it. The tray prints nothing about this; run it from a terminal to see
+Avalonia's messages. It also needs `DISPLAY` (XWayland on a Wayland session).
+
+**Saving settings says the daemon cannot be reached, or "Restart the Vigil daemon to apply".** The file is saved either way.
+Without a daemon the settings apply at its next start; the keys the message names (`Linux.Backend`, and `Linux.Strategy` on the
+`Uinput` backend) apply after you restart the daemon.
+
 **Windows: SmartScreen warns about `vigil.exe`.** The programs are not signed. Check the zip against `SHA256SUMS` from
 the release before you allow it.
 
@@ -816,7 +952,8 @@ the release before you allow it.
 - Verify the Linux build on real desktops (X11 first, then GNOME on Wayland), measure which strategy each counts as input,
   and confirm the portal consent survives a restart under the systemd unit.
 - Idle time on Wayland beyond GNOME (the `ext-idle-notify-v1` protocol, KDE Plasma, wlroots compositors).
-- Tray UI.
+- Start the tray at login (today you add it to your login items, startup folder or desktop autostart yourself).
+- Verify the tray on real desktops (macOS menu bar, Windows notification area, GNOME with the AppIndicator extension, KDE Plasma).
 
 ## Contributing and development
 
@@ -836,4 +973,6 @@ key or systemd units. `vigil diag` is read only.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). The programs contain third-party components (the .NET runtime, Avalonia, SkiaSharp and Skia,
+HarfBuzz, ANGLE, Tmds.DBus.Protocol and others), whose licenses are in [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt); it is
+shipped next to `LICENSE` in every package (in `Contents/Resources` of both macOS apps).
