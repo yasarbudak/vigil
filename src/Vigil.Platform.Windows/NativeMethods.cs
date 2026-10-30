@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using Microsoft.Win32.SafeHandles;
 
 [assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
 
@@ -217,4 +218,19 @@ internal static partial class NativeMethods
     [LibraryImport(Kernel32, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool GetSystemPowerStatus(out SystemPowerStatus status);
+
+    // fileapi.h: HANDLE CreateFileW(LPCWSTR, DWORD dwDesiredAccess, DWORD dwShareMode, LPSECURITY_ATTRIBUTES, DWORD dwCreationDisposition,
+    // DWORD dwFlagsAndAttributes, HANDLE hTemplateFile). INVALID_HANDLE_VALUE on failure; GetLastError has the reason. The SafeFileHandle
+    // marshaller turns it into an invalid handle that the caller checks.
+    // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew
+    [LibraryImport(Kernel32, EntryPoint = "CreateFileW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    internal static partial SafeFileHandle CreateFileW(
+        string fileName, uint desiredAccess, uint shareMode, nint securityAttributes, uint creationDisposition, uint flagsAndAttributes, nint templateFile);
+
+    // fileapi.h: BOOL SetFileInformationByHandle(HANDLE, FILE_INFO_BY_HANDLE_CLASS, LPVOID, DWORD dwBufferSize). Zero on failure; GetLastError
+    // has the reason. The handle must be opened with the access the class needs (DELETE for a rename).
+    // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle
+    [LibraryImport(Kernel32, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static unsafe partial bool SetFileInformationByHandle(SafeFileHandle file, int informationClass, byte* information, uint bufferSize);
 }
