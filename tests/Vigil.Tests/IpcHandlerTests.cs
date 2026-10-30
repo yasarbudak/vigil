@@ -7,10 +7,13 @@ namespace Vigil.Tests;
 
 public class IpcHandlerTests
 {
-    private static IpcHandler Create(out PresenceEngine engine)
+    private static IpcHandler Create(out PresenceEngine engine) => Create(out engine, out _);
+
+    private static IpcHandler Create(out PresenceEngine engine, out FakeLifetime lifetime)
     {
         engine = new PresenceEngine(new VigilOptions(), TimeProvider.System, new NullActivityLog());
-        return new IpcHandler(engine);
+        lifetime = new FakeLifetime();
+        return new IpcHandler(engine, lifetime);
     }
 
     [Fact]
@@ -79,5 +82,35 @@ public class IpcHandlerTests
     public void An_unknown_command_is_an_error()
     {
         Assert.False(Create(out _).Handle(new IpcRequest((IpcCommand)99)).Ok);
+    }
+
+    [Fact]
+    public void Shutdown_is_acknowledged_but_the_daemon_stops_only_after_the_response_was_sent()
+    {
+        var handler = Create(out _, out var lifetime);
+        var request = new IpcRequest(IpcCommand.Shutdown);
+
+        var response = handler.Handle(request);
+
+        Assert.True(response.Ok);
+        Assert.Equal(0, lifetime.StopCalls); // The client must get its answer before the connection can be cut.
+
+        handler.ResponseSent(request);
+
+        Assert.Equal(1, lifetime.StopCalls);
+    }
+
+    [Theory]
+    [InlineData("Status")]
+    [InlineData("Resume")]
+    public void Other_commands_never_stop_the_daemon(string command)
+    {
+        var handler = Create(out _, out var lifetime);
+        var request = new IpcRequest(Enum.Parse<IpcCommand>(command));
+
+        handler.Handle(request);
+        handler.ResponseSent(request);
+
+        Assert.Equal(0, lifetime.StopCalls);
     }
 }

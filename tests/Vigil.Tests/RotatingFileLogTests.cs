@@ -114,6 +114,28 @@ public class RotatingFileLogTests
     }
 
     [Fact]
+    public void Rotation_works_while_a_reader_holds_the_file_open_without_sharing_delete()
+    {
+        // Windows refuses to rename a file that another handle holds without FileShare.Delete; a reader that shares
+        // reads and writes (the least that can coexist with the writer) is exactly that. Unix renames regardless.
+        using var dir = new TempDataDirectory();
+        using var writer = new RotatingFileWriter(dir.Paths.LogPath, Cap);
+        foreach (var c in "abcd")
+        {
+            writer.WriteLine(Line(c));
+        }
+
+        using var reader = new FileStream(dir.Paths.LogPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        writer.WriteLine(Line('e')); // would rotate
+
+        Assert.Equal(Line('a') + "\n" + Line('b') + "\n" + Line('c') + "\n" + Line('d') + "\n", SharedFile.ReadAllText(writer.BackupPath));
+        Assert.Equal(Line('e') + "\n", SharedFile.ReadAllText(dir.Paths.LogPath));
+
+        writer.WriteLine(Line('f')); // and the writer carries on with the new file
+        Assert.Equal(Line('e') + "\n" + Line('f') + "\n", SharedFile.ReadAllText(dir.Paths.LogPath));
+    }
+
+    [Fact]
     public async Task Concurrent_writers_produce_only_intact_lines()
     {
         using var dir = new TempDataDirectory();

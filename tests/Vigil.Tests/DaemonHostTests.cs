@@ -9,6 +9,9 @@ using Vigil.Core.Presence;
 using Vigil.Daemon;
 using Vigil.Ipc;
 using Vigil.Platform.MacOS;
+using Vigil.Platform.Windows;
+using MacOSStrategy = Vigil.Platform.MacOS.InjectionStrategy;
+using WindowsStrategy = Vigil.Platform.Windows.InjectionStrategy;
 
 namespace Vigil.Tests;
 
@@ -54,7 +57,7 @@ public class DaemonHostTests
     }
 
     [Fact]
-    public void Config_file_is_bound_including_schedule_and_macOS_strategy()
+    public void Config_file_is_bound_including_schedule_and_platform_strategies()
     {
         using var dir = new TempDataDirectory();
         dir.WriteConfig("""
@@ -65,7 +68,8 @@ public class DaemonHostTests
                 "PauseOnBattery": true,
                 "Schedule": { "ActiveDays": ["Monday", "Tuesday"], "Start": "09:00", "End": "17:30" }
               },
-              "MacOS": { "Strategy": "F15KeyUp" }
+              "MacOS": { "Strategy": "F15KeyUp" },
+              "Windows": { "Strategy": "F15KeyUp" }
             }
             """);
         using var host = Build(dir);
@@ -78,7 +82,8 @@ public class DaemonHostTests
         Assert.Equal([DayOfWeek.Monday, DayOfWeek.Tuesday], options.Schedule.ActiveDays);
         Assert.Equal(new TimeOnly(9, 0), options.Schedule.Start);
         Assert.Equal(new TimeOnly(17, 30), options.Schedule.End);
-        Assert.Equal(InjectionStrategy.F15KeyUp, host.Services.GetRequiredService<MacOSOptions>().Strategy);
+        Assert.Equal(MacOSStrategy.F15KeyUp, host.Services.GetRequiredService<MacOSOptions>().Strategy);
+        Assert.Equal(WindowsStrategy.F15KeyUp, host.Services.GetRequiredService<WindowsOptions>().Strategy);
     }
 
     [Fact]

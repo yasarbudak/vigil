@@ -1,6 +1,9 @@
 using Vigil.Commands;
 using Vigil.Configuration;
 using Vigil.Platform.MacOS;
+using Vigil.Platform.Windows;
+using MacOSStrategy = Vigil.Platform.MacOS.InjectionStrategy;
+using WindowsStrategy = Vigil.Platform.Windows.InjectionStrategy;
 
 namespace Vigil.Tests;
 
@@ -14,7 +17,8 @@ public class ConfigurationTests
         var settings = VigilConfiguration.Load(dir.Paths.ConfigPath);
 
         Assert.Equal(TimeSpan.FromMinutes(4), settings.Vigil.Threshold);
-        Assert.Equal(InjectionStrategy.MouseNudge, settings.MacOS.Strategy);
+        Assert.Equal(MacOSStrategy.MouseNudge, settings.MacOS.Strategy);
+        Assert.Equal(WindowsStrategy.MouseNudge, settings.Windows.Strategy);
     }
 
     [Fact]
@@ -23,7 +27,8 @@ public class ConfigurationTests
         using var dir = new TempDataDirectory();
         dir.WriteConfig("""
             { "Vigil": { "Threshold": "00:03:30", "Schedule": { "Start": "08:15", "End": "19:45", "ActiveDays": ["Friday"] } },
-              "MacOS": { "Strategy": "F15KeyUp" } }
+              "MacOS": { "Strategy": "F15KeyUp" },
+              "Windows": { "Strategy": "F15KeyUp" } }
             """);
 
         var settings = VigilConfiguration.Load(dir.Paths.ConfigPath);
@@ -32,7 +37,8 @@ public class ConfigurationTests
         Assert.Equal(new TimeOnly(8, 15), settings.Vigil.Schedule.Start);
         Assert.Equal(new TimeOnly(19, 45), settings.Vigil.Schedule.End);
         Assert.Equal([DayOfWeek.Friday], settings.Vigil.Schedule.ActiveDays);
-        Assert.Equal(InjectionStrategy.F15KeyUp, settings.MacOS.Strategy);
+        Assert.Equal(MacOSStrategy.F15KeyUp, settings.MacOS.Strategy);
+        Assert.Equal(WindowsStrategy.F15KeyUp, settings.Windows.Strategy);
     }
 
     [Fact]
@@ -64,6 +70,7 @@ public class ConfigurationTests
     [InlineData("{ bad")]
     [InlineData("""{ "Vigil": { "Threshold": "not-a-time" } }""")]
     [InlineData("""{ "MacOS": { "Strategy": "Telepathy" } }""")]
+    [InlineData("""{ "Windows": { "Strategy": "Telepathy" } }""")]
     public void Unusable_files_raise_ConfigurationException_naming_the_file(string json)
     {
         using var dir = new TempDataDirectory();
@@ -72,6 +79,20 @@ public class ConfigurationTests
         var error = Assert.Throws<ConfigurationException>(() => VigilConfiguration.Load(dir.Paths.ConfigPath));
 
         Assert.Contains(dir.Paths.ConfigPath, error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_Windows_section_is_bound_independently_of_the_macOS_one()
+    {
+        using var dir = new TempDataDirectory();
+        dir.WriteConfig("""{ "Windows": { "Strategy": "F15KeyUp" } }""");
+
+        var settings = VigilConfiguration.Load(dir.Paths.ConfigPath);
+
+        Assert.Equal(WindowsStrategy.F15KeyUp, settings.Windows.Strategy);
+        Assert.Equal(MacOSStrategy.MouseNudge, settings.MacOS.Strategy);
+        Assert.Equal(settings.Windows, settings.Platform.Windows);
+        Assert.Equal(settings.MacOS, settings.Platform.MacOS);
     }
 
     [Fact]
