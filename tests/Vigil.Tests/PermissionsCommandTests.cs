@@ -29,13 +29,13 @@ public class PermissionsCommandTests
     }
 
     [Fact]
-    public void A_platform_that_needs_no_permission_says_there_is_nothing_to_request_and_succeeds()
+    public async Task A_platform_that_needs_no_permission_says_there_is_nothing_to_request_and_succeeds()
     {
         using var dir = new TempDataDirectory();
         using var output = new StringWriter();
         using var error = new StringWriter();
 
-        var code = PermissionsCommand.Request(dir.Paths, output, error, Factory(new Probe(true), requester: null));
+        var code = await PermissionsCommand.RequestAsync(dir.Paths, output, error, Factory(new Probe(true), requester: null), TestContext.Current.CancellationToken);
 
         Assert.Equal(0, code);
         Assert.Contains("Nothing to request: Fake OS needs no permission", output.ToString(), StringComparison.Ordinal);
@@ -43,27 +43,27 @@ public class PermissionsCommandTests
     }
 
     [Fact]
-    public void A_platform_without_a_requester_that_is_not_granted_still_fails()
+    public async Task A_platform_without_a_requester_that_is_not_granted_still_fails()
     {
         using var dir = new TempDataDirectory();
         using var output = new StringWriter();
         using var error = new StringWriter();
 
-        var code = PermissionsCommand.Request(dir.Paths, output, error, Factory(new Probe(false), requester: null));
+        var code = await PermissionsCommand.RequestAsync(dir.Paths, output, error, Factory(new Probe(false), requester: null), TestContext.Current.CancellationToken);
 
         Assert.Equal(1, code);
         Assert.Contains("no permission to request", error.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
-    public void A_platform_with_a_requester_asks_it_and_reports_the_result()
+    public async Task A_platform_with_a_requester_asks_it_and_reports_the_result()
     {
         using var dir = new TempDataDirectory();
         using var output = new StringWriter();
         using var error = new StringWriter();
         var requester = new Requester(granted: true);
 
-        var code = PermissionsCommand.Request(dir.Paths, output, error, Factory(new Probe(false), requester));
+        var code = await PermissionsCommand.RequestAsync(dir.Paths, output, error, Factory(new Probe(false), requester), TestContext.Current.CancellationToken);
 
         Assert.Equal(0, code);
         Assert.Equal(1, requester.Calls);

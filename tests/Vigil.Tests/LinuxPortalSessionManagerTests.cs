@@ -1,3 +1,4 @@
+using Vigil.Core.Abstractions;
 using Vigil.Platform.Linux;
 using Vigil.Platform.Linux.DBus;
 using Vigil.Platform.Linux.Portal;
@@ -298,84 +299,207 @@ public sealed class LinuxPortalSessionManagerTests : IDisposable
         Assert.Contains(manager.Diagnose(), d => d is { Label: "Portal session:", Value: "open (pointer and keyboard)" });
     }
 
+    private static CancellationToken Token => TestContext.Current.CancellationToken;
+
     [Fact]
-    public void Requesting_consent_saves_the_token_and_closes_the_session()
+    public async Task Requesting_consent_saves_the_token_and_keeps_the_session_for_injection()
     {
         using var manager = Manager();
 
-        var result = manager.RequestConsent();
+        var result = await manager.RequestConsentAsync(Token);
 
         Assert.True(result.Granted);
+        Assert.Equal(ConsentOutcome.Granted, result.Outcome);
         Assert.Equal("token_after", _tokens.Read());
-        Assert.True(_portal.Disposed);
-        Assert.Contains(_portal.CallsTo("Close"), c => c.Interface == PortalProtocol.SessionInterface);
+        Assert.False(_portal.Disposed); // the connection is the session; it stays open
+        Assert.DoesNotContain(_portal.CallsTo("Close"), c => c.Interface == PortalProtocol.SessionInterface);
+        Assert.Contains(manager.Diagnose(), d => d is { Label: "Portal session:", Value: "open (pointer and keyboard)" });
+
+        Assert.True(manager.Inject().Posted); // the same session, no second dialog or start
+        Assert.Single(_portal.CallsTo("Start"));
+        Assert.Equal(2, _portal.CallsTo("NotifyPointerMotion").Count());
     }
 
     [Fact]
-    public void Requesting_consent_again_offers_the_saved_token_so_that_a_valid_one_needs_no_dialog()
+    public async Task Requesting_consent_again_replaces_the_open_session_and_closes_the_old_one()
+    {
+        var first = new FakePortalConnection { NewRestoreToken = "first_token" };
+        var second = new FakePortalConnection { NewRestoreToken = "second_token" };
+        var connections = new Queue<FakePortalConnection>([first, second]);
+        using var manager = new PortalSessionManager(new PortalClient(new FakeConnector(_ => connections.Dequeue()), Quick), _tokens, new LinuxOptions());
+
+        Assert.True((await manager.RequestConsentAsync(Token)).Granted);
+        Assert.True((await manager.RequestConsentAsync(Token)).Granted);
+
+        Assert.True(first.Disposed);
+        Assert.False(second.Disposed);
+        Assert.Equal("second_token", _tokens.Read());
+        Assert.True(manager.Inject().Posted);
+        Assert.Equal(2, second.CallsTo("NotifyPointerMotion").Count());
+        Assert.Empty(first.CallsTo("NotifyPointerMotion"));
+    }
+
+    [Fact]
+    public async Task Requesting_consent_again_offers_the_saved_token_so_that_a_valid_one_needs_no_dialog()
     {
         _tokens.Write("saved");
         using var manager = Manager();
 
-        manager.RequestConsent();
+        await manager.RequestConsentAsync(Token);
 
         Assert.True(_portal.SelectDevicesOptions[0].TryGetString("restore_token", out var sent));
         Assert.Equal("saved", sent);
     }
 
     [Fact]
-    public void A_cancelled_request_is_not_granted_and_a_used_up_token_is_removed()
+    public async Task A_cancelled_request_is_cancelled_and_a_used_up_token_is_removed()
     {
         _portal.StartResponse = 1;
         _tokens.Write("saved");
         using var manager = Manager();
 
-        var result = manager.RequestConsent();
+        var result = await manager.RequestConsentAsync(Token);
 
-        Assert.False(result.Granted);
+        Assert.Equal(ConsentOutcome.Cancelled, result.Outcome);
         Assert.Contains("cancelled", result.Message, StringComparison.Ordinal);
         Assert.False(_tokens.Exists());
+        Assert.True(_portal.Disposed);
     }
 
     [Fact]
-    public void A_cancelled_first_request_saves_nothing()
+    public async Task A_cancelled_first_request_saves_nothing()
     {
         _portal.StartResponse = 1;
         using var manager = Manager();
 
-        Assert.False(manager.RequestConsent().Granted);
+        Assert.False((await manager.RequestConsentAsync(Token)).Granted);
         Assert.False(_tokens.Exists());
     }
 
     [Fact]
-    public void A_consent_without_the_needed_device_is_not_granted_and_saves_nothing()
+    public async Task A_request_the_portal_ended_is_a_failure()
+    {
+        _portal.StartResponse = 2;
+        using var manager = Manager();
+
+        var result = await manager.RequestConsentAsync(Token);
+
+        Assert.Equal(ConsentOutcome.Failed, result.Outcome);
+        Assert.False(_tokens.Exists());
+    }
+
+    [Fact]
+    public async Task A_dialog_nobody_answers_times_out_and_the_request_is_closed()
+    {
+        _portal.StartSilence = true;
+        var shortWait = new PortalTimeouts(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(150));
+        using var manager = new PortalSessionManager(new PortalClient(new FakeConnector(_ => _portal), shortWait), _tokens, new LinuxOptions());
+
+        var result = await manager.RequestConsentAsync(Token);
+
+        Assert.Equal(ConsentOutcome.TimedOut, result.Outcome);
+        Assert.Single(_portal.CallsTo("Close"), c => c.Interface == PortalProtocol.RequestInterface);
+        Assert.False(_tokens.Exists());
+    }
+
+    [Fact]
+    public async Task A_consent_without_the_needed_device_is_denied_and_saves_nothing()
     {
         _portal.GrantedDevices = 1; // keyboard only; MouseNudge needs the pointer
         using var manager = Manager();
 
-        var result = manager.RequestConsent();
+        var result = await manager.RequestConsentAsync(Token);
 
-        Assert.False(result.Granted);
+        Assert.Equal(ConsentOutcome.Denied, result.Outcome);
         Assert.Contains("pointer", result.Message, StringComparison.Ordinal);
         Assert.False(_tokens.Exists());
+        Assert.True(_portal.Disposed);
     }
 
     [Fact]
-    public void A_portal_without_persistence_is_reported_because_the_daemon_could_not_restart()
+    public async Task A_portal_without_persistence_is_reported_because_the_daemon_could_not_restart()
     {
         _portal.NewRestoreToken = null;
         using var manager = Manager();
 
-        var result = manager.RequestConsent();
+        var result = await manager.RequestConsentAsync(Token);
 
-        Assert.False(result.Granted);
+        Assert.Equal(ConsentOutcome.Failed, result.Outcome);
         Assert.Contains("no restore token", result.Message, StringComparison.Ordinal);
         Assert.Contains("Uinput", result.Message, StringComparison.Ordinal);
         Assert.False(_tokens.Exists());
     }
 
     [Fact]
-    public void The_input_backend_asks_for_consent_only_through_RequestAccess()
+    public async Task A_second_request_while_one_waits_for_the_user_is_in_progress_and_does_not_touch_the_portal()
+    {
+        _portal.StartSilence = true; // the dialog nobody has answered yet
+        using var manager = Manager();
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        var first = manager.RequestConsentAsync(stop.Token);
+        await WaitUntilAsync(() => _portal.CallsTo("Start").Any());
+
+        var second = await manager.RequestConsentAsync(Token);
+
+        Assert.Equal(ConsentOutcome.InProgress, second.Outcome);
+        Assert.Contains("already in progress", second.Message, StringComparison.Ordinal);
+        Assert.Single(_portal.CallsTo("Start"));
+        Assert.Equal(1, _connector!.Connects);
+
+        await stop.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
+
+        // The flag is released: the next request is a normal one again.
+        _portal.StartSilence = false;
+        Assert.True((await manager.RequestConsentAsync(Token)).Granted);
+    }
+
+    [Fact]
+    public async Task The_polling_does_not_use_the_saved_token_while_a_request_waits_for_the_user()
+    {
+        _tokens.Write("saved");
+        _portal.StartSilence = true;
+        using var manager = Manager();
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        var pending = manager.RequestConsentAsync(stop.Token);
+        await WaitUntilAsync(() => _portal.CallsTo("Start").Any());
+
+        var injection = manager.Inject();
+
+        Assert.False(injection.Posted);
+        Assert.Contains("waiting for an answer", injection.Error, StringComparison.Ordinal);
+        Assert.Single(_portal.SelectDevicesOptions); // only the request's own SelectDevices
+
+        await stop.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "The condition was not met in time.");
+            await Task.Delay(10, Token);
+        }
+    }
+
+    [Fact]
+    public void The_input_backend_never_asks_for_consent_in_the_calling_process()
+    {
+        using var backend = new PortalInputBackend(Manager());
+
+        Assert.False(backend.RequestAccess()); // only reports: no token, no session
+        _tokens.Write("saved");
+        Assert.True(backend.RequestAccess());
+
+        Assert.Empty(_portal.Calls); // nothing reached the bus
+        Assert.Equal(0, _connector!.Connects);
+        Assert.Contains("vigil permissions request", backend.NotGrantedHint, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_daemons_own_start_uses_the_saved_token_without_asking()
     {
         _tokens.Write("saved");
         using var backend = new PortalInputBackend(Manager());
@@ -385,19 +509,14 @@ public sealed class LinuxPortalSessionManagerTests : IDisposable
         Assert.Single(_portal.CallsTo("Start")); // the daemon's own start, with the token
     }
 
-    private PortalSessionManager ManagerWith(uint startResponse)
-    {
-        var portal = new FakePortalConnection { StartResponse = startResponse };
-        return new PortalSessionManager(new PortalClient(new FakeConnector(_ => portal), Quick), _tokens, new LinuxOptions());
-    }
-
     [Fact]
-    public void The_hint_after_a_refused_request_is_the_reason_the_request_gave()
+    public async Task The_input_backend_hands_the_request_to_the_session_manager()
     {
-        using var backend = new PortalInputBackend(ManagerWith(startResponse: 1));
+        using var backend = new PortalInputBackend(Manager());
 
-        Assert.False(backend.RequestAccess());
+        var result = await ((IConsentRequester)backend).RequestConsentAsync(Token);
 
-        Assert.Contains("cancelled", backend.NotGrantedHint, StringComparison.Ordinal);
+        Assert.True(result.Granted);
+        Assert.Equal("token_after", _tokens.Read());
     }
 }

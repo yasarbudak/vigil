@@ -226,18 +226,19 @@ public class LinuxStatusTests
     }
 
     [Fact]
-    public void A_refused_permission_request_prints_the_hint_of_the_platform()
+    public async Task A_refused_permission_request_prints_the_hint_of_the_platform()
     {
         using var dir = new TempDataDirectory();
         using var output = new StringWriter();
         using var error = new StringWriter();
         var fake = new TestPlatform();
 
-        var code = PermissionsCommand.Request(
+        var code = await PermissionsCommand.RequestAsync(
             dir.Paths,
             output,
             error,
-            _ => new PlatformServices("Linux", fake, fake, fake, new Denied(), new Denied(), PermissionNotGrantedHint: () => "The consent dialog was cancelled."));
+            _ => new PlatformServices("Linux", fake, fake, fake, new Denied(), new Denied(), PermissionNotGrantedHint: () => "The consent dialog was cancelled."),
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(1, code);
         Assert.Contains("The consent dialog was cancelled.", output.ToString(), StringComparison.Ordinal);
