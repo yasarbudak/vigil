@@ -1,3 +1,5 @@
+using Vigil.Platform.Windows;
+
 namespace Vigil.Install;
 
 /// <summary>
@@ -81,12 +83,27 @@ internal static class InstallFiles
             }
 
             SetMode(temporary, mode); // Independent of the umask.
-            File.Move(temporary, path, overwrite: true);
+            ReplaceFile(temporary, path);
         }
         finally
         {
             File.Delete(temporary); // No-op after a successful move.
         }
+    }
+
+    /// <summary>
+    /// Renames <paramref name="temporary"/> over <paramref name="path"/>. On Windows the rename is requested with POSIX semantics first,
+    /// which replaces a file other programs have open (<see cref="AtomicFileReplace"/>); the classic rename (<c>MoveFileExW</c>) cannot,
+    /// and it is the fallback where the request is refused (a file system or Windows build without it), with its own error.
+    /// </summary>
+    private static void ReplaceFile(string temporary, string path)
+    {
+        if (OperatingSystem.IsWindows() && AtomicFileReplace.TryReplace(temporary, path, out _))
+        {
+            return;
+        }
+
+        File.Move(temporary, path, overwrite: true);
     }
 
     /// <summary>Removes the data directory, but only when it is exactly the default Vigil directory.</summary>
