@@ -93,6 +93,27 @@ Never run `vigil run`, `vigil permissions request`, `vigil install` or `vigil un
 just to "see it work": they post input events, show a system prompt, or change your LaunchAgents and launchd state. The tests use a fake platform, so no real input is ever posted. `vigil diag`
 is read only and safe.
 
+## Continuous integration
+
+Workflows live in `.github/workflows`:
+
+- `ci.yml` runs on pushes to `main` and on pull requests. It builds and tests on Ubuntu, Windows and macOS
+  (`dotnet build Vigil.slnx -c Release`, then `dotnet test --solution Vigil.slnx -c Release --no-build`), and runs
+  `scripts/package-macos.sh` for `osx-x64` (Intel runner) and `osx-arm64` (Apple silicon runner), uploading each
+  `Vigil.app` as a zip. Native AOT cannot cross-compile, so each architecture needs its own runner.
+- `release.yml` runs when a tag `v*` is pushed. The tag must equal `v` plus `<Version>` in `src/Vigil/Vigil.csproj`.
+  It builds both packages, writes `Vigil-<version>-osx-x64.zip`, `Vigil-<version>-osx-arm64.zip` and `SHA256SUMS`,
+  and creates the GitHub Release with the preinstalled `gh` CLI. The release notes say the build is unsigned.
+
+Rules for these workflows: only official `actions/*` actions, each pinned to a full commit SHA with the version in a
+comment; `permissions: contents: read` at the top, `contents: write` only on the release job; `checkout` with
+`persist-credentials: false`; no secrets (the release job uses the automatic, per-run `github.token`); runner images
+pinned by version (`ubuntu-24.04`, `windows-2025`, `macos-15`, `macos-15-intel`) instead of `-latest`;
+`DOTNET_CLI_TELEMETRY_OPTOUT` and `DOTNET_NOLOGO` set. To update an action, look up the commit of the new tag
+(`gh api repos/actions/<name>/git/ref/tags/<tag>`; if the type is `tag`, resolve it through `git/tags/<sha>`) and
+change both the SHA and the comment. The runner labels are listed at
+https://docs.github.com/en/actions/reference/runners/github-hosted-runners; check them when an image is retired.
+
 ## Packaging and autostart (macOS)
 
 ```

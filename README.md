@@ -1,5 +1,7 @@
 # Vigil
 
+[![CI](https://github.com/yasarbudak/vigil/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/yasarbudak/vigil/actions/workflows/ci.yml)
+
 Vigil keeps chat apps such as Teams and Slack from flipping to "Away" while you are at your desk but not touching
 the keyboard or mouse: reading, in a call, thinking.
 
@@ -157,6 +159,11 @@ The script publishes a Native AOT binary, assembles an app bundle, and signs it 
 `artifacts/<rid>/Vigil.app` (for example `artifacts/osx-x64/Vigil.app`).
 
 ## Install on macOS
+
+Prebuilt, unsigned (ad-hoc signed) zips for Intel and Apple silicon will be attached to the
+[Releases](https://github.com/yasarbudak/vigil/releases) page once a version is tagged. Until then, build from source as
+described above. Unzip a release and continue with step 1 below, using the unzipped `Vigil.app` instead of
+`artifacts/osx-x64/Vigil.app`.
 
 Vigil never starts itself. You can run `vigil run` in a terminal, or install the LaunchAgent once with
 `vigil install` so macOS starts it at login.
@@ -431,7 +438,6 @@ start the daemon again. `vigil diag` validates the file without starting the dae
 - Windows support.
 - Linux support, X11 and Wayland (via uinput).
 - Tray UI.
-- CI and releases.
 
 ## Contributing and development
 
