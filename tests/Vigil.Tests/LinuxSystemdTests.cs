@@ -181,7 +181,7 @@ public sealed class LinuxSystemdUnitManagerTests : IDisposable
 
     private string UnitPath => Path.Combine(_units, "vigil.service");
 
-    [Fact]
+    [UnixOnlyFact]
     public void A_fresh_install_writes_the_unit_reloads_and_enables_it_now()
     {
         var binary = MakeBinary();
@@ -202,7 +202,7 @@ public sealed class LinuxSystemdUnitManagerTests : IDisposable
         Assert.Empty(_error.ToString());
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Without_a_systemd_user_instance_install_refuses_and_writes_nothing()
     {
         _systemctl.ManagerAvailable = false;
@@ -217,7 +217,7 @@ public sealed class LinuxSystemdUnitManagerTests : IDisposable
         Assert.Contains("No medium found", _error.ToString(), StringComparison.Ordinal);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Installing_again_with_the_same_settings_changes_nothing()
     {
         var binary = MakeBinary();
@@ -233,7 +233,7 @@ public sealed class LinuxSystemdUnitManagerTests : IDisposable
         Assert.Contains("Already installed and running", _output.ToString(), StringComparison.Ordinal);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void An_identical_unit_that_is_not_running_is_only_brought_up()
     {
         var binary = MakeBinary();
@@ -247,7 +247,7 @@ public sealed class LinuxSystemdUnitManagerTests : IDisposable
         Assert.Equal(["daemon-reload", "enable --now vigil.service"], _systemctl.Changes);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void A_different_unit_is_refused_without_force_and_left_alone()
     {
         var first = MakeBinary("one");
@@ -263,7 +263,7 @@ public sealed class LinuxSystemdUnitManagerTests : IDisposable
         Assert.Contains("--force", _error.ToString(), StringComparison.Ordinal);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Force_stops_the_running_unit_then_writes_the_new_one_and_starts_it()
     {
         Manager().Install(MakeBinary("one"), force: false, _output, _error);
@@ -277,7 +277,7 @@ public sealed class LinuxSystemdUnitManagerTests : IDisposable
         Assert.Equal(SystemdUserUnit.Render(new SystemdUnitSpec(second)), File.ReadAllText(UnitPath));
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void If_the_old_unit_cannot_be_stopped_the_old_file_stays()
     {
         Manager().Install(MakeBinary("one"), force: false, _output, _error);
@@ -291,7 +291,7 @@ public sealed class LinuxSystemdUnitManagerTests : IDisposable
         Assert.Contains("disable --now failed", _error.ToString(), StringComparison.Ordinal);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void A_failed_start_leaves_the_unit_written_and_says_where_to_look()
     {
         _systemctl.EnableResult = new SystemctlResult(1, "Unit is masked");
@@ -304,7 +304,7 @@ public sealed class LinuxSystemdUnitManagerTests : IDisposable
         Assert.Contains("journalctl --user -u vigil.service", _error.ToString(), StringComparison.Ordinal);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void A_failed_reload_stops_before_enabling()
     {
         _systemctl.ReloadResult = new SystemctlResult(1, "Access denied");
@@ -315,7 +315,7 @@ public sealed class LinuxSystemdUnitManagerTests : IDisposable
         Assert.DoesNotContain("enable --now vigil.service", _systemctl.Calls);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void A_custom_data_directory_is_written_into_the_unit()
     {
         var custom = Path.Combine(_root.FullName, "elsewhere");
@@ -325,7 +325,7 @@ public sealed class LinuxSystemdUnitManagerTests : IDisposable
         Assert.Contains($"Environment=\"VIGIL_DATA_DIR={custom}\"", File.ReadAllText(UnitPath), StringComparison.Ordinal);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Install_refuses_a_binary_that_is_not_an_absolute_existing_path()
     {
         Assert.Equal(1, Manager().Install(null, force: false, _output, _error));
@@ -334,7 +334,7 @@ public sealed class LinuxSystemdUnitManagerTests : IDisposable
         Assert.Empty(_systemctl.Calls);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Uninstall_stops_and_disables_the_unit_then_removes_the_file()
     {
         Manager().Install(MakeBinary(), force: false, _output, _error);
@@ -349,7 +349,7 @@ public sealed class LinuxSystemdUnitManagerTests : IDisposable
         Assert.True(Directory.Exists(_dataDirectory)); // kept without --purge
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Uninstall_keeps_the_file_when_the_unit_cannot_be_stopped()
     {
         Manager().Install(MakeBinary(), force: false, _output, _error);
@@ -361,7 +361,7 @@ public sealed class LinuxSystemdUnitManagerTests : IDisposable
         Assert.True(File.Exists(UnitPath));
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Uninstall_with_nothing_installed_says_so_and_changes_nothing()
     {
         var code = Manager().Uninstall(purge: false, _output, _error);
@@ -371,7 +371,7 @@ public sealed class LinuxSystemdUnitManagerTests : IDisposable
         Assert.Contains("Not installed", _output.ToString(), StringComparison.Ordinal);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Purge_deletes_only_the_default_data_directory()
     {
         Manager().Install(MakeBinary(), force: false, _output, _error);
@@ -383,7 +383,7 @@ public sealed class LinuxSystemdUnitManagerTests : IDisposable
         Assert.True(Directory.Exists(_root.FullName));
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Purge_refuses_a_data_directory_that_is_not_the_default()
     {
         var custom = Path.Combine(_root.FullName, "elsewhere");
@@ -395,7 +395,7 @@ public sealed class LinuxSystemdUnitManagerTests : IDisposable
         Assert.True(Directory.Exists(custom));
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Purge_accepts_the_lower_case_default_name_of_Linux_and_still_refuses_other_names()
     {
         // The test directory itself is named "vigil" (lower case, as XDG says); a directory with another name is never purged.

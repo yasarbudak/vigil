@@ -77,7 +77,7 @@ public class LinuxDBusTests
         Assert.Equal(expected, DBusAddresses.Resolve(DBusBus.System, Env(("DBUS_SYSTEM_BUS_ADDRESS", configured)), _ => true));
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Without_the_variable_the_session_bus_is_the_socket_in_the_runtime_directory_if_it_exists()
     {
         var env = Env(("XDG_RUNTIME_DIR", "/run/user/1000"));

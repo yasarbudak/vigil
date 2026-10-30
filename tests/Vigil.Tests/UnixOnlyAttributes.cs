@@ -3,9 +3,8 @@ using System.Runtime.CompilerServices;
 namespace Vigil.Tests;
 
 /// <summary>
-/// A fact for the macOS app-bundle and LaunchAgent feature, which only exists on macOS (<c>install</c> and
-/// <c>uninstall</c> exit 1 elsewhere) and is tested with Unix paths and file modes. Skipped on Windows, still run on
-/// Linux and macOS.
+/// A fact for a macOS or Linux feature (the app bundle, the LaunchAgent, the systemd unit, D-Bus addresses) that is
+/// tested with Unix paths and file modes. Skipped on Windows, where those features do not exist; run on Linux and macOS.
 /// </summary>
 [AttributeUsage(AttributeTargets.Method)]
 internal sealed class UnixOnlyFactAttribute : FactAttribute
@@ -36,5 +35,5 @@ internal sealed class UnixOnlyTheoryAttribute : TheoryAttribute
 
 internal static class UnixOnly
 {
-    public const string Reason = "The macOS app-bundle and LaunchAgent feature is not supported on Windows (Unix paths and file modes).";
+    public const string Reason = "Tests a macOS or Linux feature with Unix paths and file modes, which Windows does not have.";
 }
