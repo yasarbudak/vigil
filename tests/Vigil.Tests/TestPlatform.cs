@@ -12,7 +12,14 @@ internal sealed class TestPlatform : IIdleSource, IInputInjector, ISessionState,
 
     public int InjectCalls { get; private set; }
 
-    public TimeSpan GetIdleTime() => Idle;
+    /// <summary>How many times the idle time was read: one per poll.</summary>
+    public int IdleReads { get; private set; }
+
+    public TimeSpan GetIdleTime()
+    {
+        IdleReads++;
+        return Idle;
+    }
 
     public InjectionResult Inject()
     {

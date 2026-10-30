@@ -23,7 +23,7 @@ internal sealed class PresenceRig
         }
 
         Engine = new PresenceEngine(Options, Time, Log);
-        Cycle = new PresenceCycle(Engine, Input, Input, Session, Session, Time, Options);
+        Cycle = new PresenceCycle(Engine, Input, Input, Session, Session, Time);
     }
 
     public VigilOptions Options { get; }

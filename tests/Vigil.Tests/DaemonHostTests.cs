@@ -53,7 +53,7 @@ public class DaemonHostTests
         var options = host.Services.GetRequiredService<VigilOptions>();
 
         Assert.Equal(TimeSpan.FromMinutes(4), options.Threshold);
-        Assert.IsType<JsonlActivityLog>(host.Services.GetRequiredService<IActivityLog>());
+        Assert.IsType<JsonlActivityLog>(host.Services.GetRequiredService<ReloadableActivityLog>().Current);
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public class DaemonHostTests
         dir.WriteConfig("""{ "Vigil": { "ActivityLog": { "Enabled": false } } }""");
         using var host = Build(dir);
 
-        Assert.IsType<NullActivityLog>(host.Services.GetRequiredService<IActivityLog>());
+        Assert.IsType<NullActivityLog>(host.Services.GetRequiredService<ReloadableActivityLog>().Current);
     }
 
     [Fact]
@@ -299,5 +299,38 @@ public class DaemonHostTests
         {
             Assert.Single(logs.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("PauseOnLock", StringComparison.Ordinal));
         }
+    }
+
+    [Fact]
+    public async Task ReloadConfig_applies_a_saved_file_to_the_running_daemon_and_refuses_a_bad_one()
+    {
+        using var dir = new TempDataDirectory();
+        dir.WriteConfig("""{ "Vigil": { "PollInterval": "00:00:00.300", "VerifyDelay": "00:00:00.010" } }""");
+        var platform = new TestPlatform { Locked = true };
+        using var host = Build(dir, platform);
+        await host.StartAsync(TestContext.Current.CancellationToken);
+        var locked = await IpcClient.SendAsync(dir.Paths.SocketPath, new IpcRequest(IpcCommand.Status), TestContext.Current.CancellationToken);
+        Assert.Equal(PauseReason.ScreenLocked, locked.Status!.PauseReason);
+
+        // A bad file: refused with the loader's words, and the daemon goes on as before.
+        dir.WriteConfig("""{ "Vigil": { "Threshold": "00:00:00" } }""");
+        var refused = await IpcClient.SendAsync(dir.Paths.SocketPath, new IpcRequest(IpcCommand.ReloadConfig), TestContext.Current.CancellationToken);
+        Assert.False(refused.Ok);
+        Assert.Contains("Threshold must be greater than zero", refused.Error, StringComparison.Ordinal);
+        var unchanged = await IpcClient.SendAsync(dir.Paths.SocketPath, new IpcRequest(IpcCommand.Status), TestContext.Current.CancellationToken);
+        Assert.Equal(PauseReason.ScreenLocked, unchanged.Status!.PauseReason);
+
+        // A good file: the lock rule and the poll interval change without a restart.
+        dir.WriteConfig("""{ "Vigil": { "PauseOnLock": false, "PollInterval": "00:00:00.030", "VerifyDelay": "00:00:00.010" } }""");
+        var applied = await IpcClient.SendAsync(dir.Paths.SocketPath, new IpcRequest(IpcCommand.ReloadConfig), TestContext.Current.CancellationToken);
+        Assert.True(applied.Ok);
+        Assert.Null(applied.RestartRequired);
+        await WaitUntilAsync(() => host.Services.GetRequiredService<PresenceEngine>().GetStatus().State == PresenceState.Watching);
+
+        var readsBefore = platform.IdleReads;
+        await Task.Delay(600, TestContext.Current.CancellationToken);
+        Assert.True(platform.IdleReads - readsBefore > 8, "The poll loop did not take over the shorter interval.");
+
+        await host.StopAsync(TestContext.Current.CancellationToken);
     }
 }
