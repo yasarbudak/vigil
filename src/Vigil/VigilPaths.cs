@@ -15,7 +15,7 @@ internal sealed class VigilPaths(string dataDirectory)
 
     public string SocketPath => Path.Combine(DataDirectory, "vigil.sock");
 
-    /// <summary>Receives stdout and stderr of the daemon when launchd runs it (see <c>vigil install</c>).</summary>
+    /// <summary>The daemon's own log, size-capped with one backup (<c>vigil.log.1</c>); see <c>Logging/RotatingFileWriter</c>.</summary>
     public string LogPath => Path.Combine(DataDirectory, "vigil.log");
 
     public string ConfigPath => Path.Combine(DataDirectory, "config.json");

@@ -7,6 +7,7 @@ using Vigil.Configuration;
 using Vigil.Core.Abstractions;
 using Vigil.Core.Presence;
 using Vigil.Ipc;
+using Vigil.Logging;
 using Vigil.Platform;
 using Vigil.Platform.MacOS;
 
@@ -16,8 +17,12 @@ namespace Vigil.Daemon;
 internal static class DaemonHost
 {
     /// <param name="platformFactory">Replaces the OS implementations; used by tests so no real input is ever posted.</param>
+    /// <param name="fileLog">
+    /// The provider for <c>vigil.log</c> when the caller also needs it (<see cref="RunAsync"/> logs the way a run ends).
+    /// The caller keeps ownership. Without it the host creates and disposes its own.
+    /// </param>
     /// <exception cref="ConfigurationException">config.json is unreadable, malformed or has invalid values.</exception>
-    public static HostApplicationBuilder CreateBuilder(VigilPaths paths, Func<MacOSOptions, PlatformServices>? platformFactory = null)
+    public static HostApplicationBuilder CreateBuilder(VigilPaths paths, Func<MacOSOptions, PlatformServices>? platformFactory = null, ILoggerProvider? fileLog = null)
     {
         // Validated here, before anything is constructed: a bad config must stop the daemon before it can act.
         var settings = VigilConfiguration.LoadValidated(paths.ConfigPath);
@@ -30,6 +35,17 @@ internal static class DaemonHost
             options.SingleLine = true;
             options.TimestampFormat = "HH:mm:ss ";
         });
+
+        // vigil.log is the daemon's own rotating log, for launchd and for `vigil run` alike. The console logger stays
+        // so an interactive run still prints.
+        if (fileLog is null)
+        {
+            builder.Services.AddSingleton<ILoggerProvider>(_ => new RotatingFileLoggerProvider(paths.LogPath));
+        }
+        else
+        {
+            builder.Logging.AddProvider(fileLog);
+        }
 
         var services = builder.Services;
         services.AddSingleton(paths);
@@ -71,24 +87,62 @@ internal static class DaemonHost
         return builder;
     }
 
+    /// <summary>
+    /// Runs the daemon. launchd discards stdout and stderr, so everything that ends a run is also written to
+    /// <c>vigil.log</c>: a bad config, a failed start (such as a second instance), an unexpected exception and an
+    /// unhandled exception on any thread. The console messages stay for interactive runs.
+    /// </summary>
     public static async Task<int> RunAsync(VigilPaths paths, CancellationToken cancellationToken)
     {
+        using var fileLog = new RotatingFileLoggerProvider(paths.LogPath);
+        var logger = fileLog.CreateLogger(typeof(DaemonHost).FullName!);
+
+        UnhandledExceptionEventHandler onUnhandled = (_, e) =>
+        {
+            if (e.ExceptionObject is Exception exception)
+            {
+                logger.LogCritical(exception, "Unhandled exception, the daemon is terminating.");
+            }
+            else
+            {
+                logger.LogCritical("Unhandled exception, the daemon is terminating: {Detail}", e.ExceptionObject);
+            }
+        };
+        AppDomain.CurrentDomain.UnhandledException += onUnhandled;
+
         try
         {
             paths.EnsureDataDirectory();
-            using var host = CreateBuilder(paths).Build();
+            using var host = CreateBuilder(paths, fileLog: fileLog).Build();
             await host.RunAsync(cancellationToken).ConfigureAwait(false);
             return 0;
         }
         catch (ConfigurationException ex)
         {
             Console.Error.WriteLine($"vigil: {ex.Message}");
+            logger.LogError("Exiting with code 2: {Message}", ex.Message);
             return 2;
         }
         catch (Exception ex) when (ex is PlatformNotSupportedException or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
             Console.Error.WriteLine($"vigil: {ex.Message}");
+            logger.LogError(ex, "Exiting with code 1.");
             return 1;
         }
+        catch (Exception ex) when (ex is not OperationCanceledException && LogUnexpected(logger, ex))
+        {
+            throw; // Not reached: the filter only records the exception and lets it travel on to the caller.
+        }
+        finally
+        {
+            AppDomain.CurrentDomain.UnhandledException -= onUnhandled;
+        }
+    }
+
+    /// <summary>Exception filter body: writes the exception to the log and returns false so it is not caught here.</summary>
+    private static bool LogUnexpected(ILogger logger, Exception exception)
+    {
+        logger.LogCritical(exception, "Unexpected exception, the daemon is terminating.");
+        return false;
     }
 }
