@@ -22,6 +22,40 @@ public class ConfigurationTests
     }
 
     [Fact]
+    public void A_missing_directory_gives_defaults()
+    {
+        using var dir = new TempDataDirectory();
+
+        var settings = VigilConfiguration.Load(Path.Combine(dir.Paths.DataDirectory, "nested", "config.json"));
+
+        Assert.Equal(TimeSpan.FromMinutes(4), settings.Vigil.Threshold);
+    }
+
+    [Fact]
+    public void A_file_held_open_by_a_writer_is_still_read()
+    {
+        using var dir = new TempDataDirectory();
+        dir.WriteConfig("""{ "Vigil": { "Threshold": "00:03:30" } }""");
+        using var writer = new FileStream(dir.Paths.ConfigPath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete);
+
+        var settings = VigilConfiguration.Load(dir.Paths.ConfigPath);
+
+        Assert.Equal(TimeSpan.FromMinutes(3.5), settings.Vigil.Threshold);
+    }
+
+    [Fact]
+    public void The_reader_does_not_hold_the_file_after_loading_so_it_can_be_replaced_and_deleted()
+    {
+        using var dir = new TempDataDirectory();
+        dir.WriteConfig("{}");
+
+        VigilConfiguration.Load(dir.Paths.ConfigPath);
+
+        File.Delete(dir.Paths.ConfigPath);
+        Assert.False(File.Exists(dir.Paths.ConfigPath));
+    }
+
+    [Fact]
     public void Non_default_values_of_every_kind_are_bound()
     {
         using var dir = new TempDataDirectory();
