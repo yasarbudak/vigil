@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Vigil.Core.Options;
 using Vigil.Platform;
@@ -35,7 +36,40 @@ internal static class VigilConfiguration
 
     /// <summary>Reads and binds the file without validating values. Throws <see cref="ConfigurationException"/> if it cannot.</summary>
     public static VigilSettings Load(string configPath) =>
-        Bind(configPath, builder => builder.AddJsonFile(configPath, optional: true, reloadOnChange: false));
+        Bind(configPath, builder =>
+        {
+            if (ReadShared(configPath) is { } content)
+            {
+                builder.AddJsonStream(content);
+            }
+        });
+
+    /// <summary>
+    /// Reads the whole file with <see cref="FileShare.ReadWrite"/> | <see cref="FileShare.Delete"/>, or returns null when it (or its
+    /// directory) does not exist, which means defaults. The tray replaces config.json atomically (<c>InstallFiles.WriteAtomically</c>,
+    /// a rename over the target). On Windows a rename over a file needs delete access, which is granted only if every other open handle
+    /// was opened with FILE_SHARE_DELETE (CreateFile, <c>dwShareMode</c>: it "enables subsequent open operations on a file to request
+    /// delete access"; "Delete access allows both delete and rename operations";
+    /// https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew). <c>AddJsonFile</c> opens the file through
+    /// <c>FileStream(..., FileShare.ReadWrite)</c> (dotnet/runtime, <c>FileConfigurationProvider.Load</c>), without Delete, so a save
+    /// failed with a sharing violation whenever the daemon was reading at that moment. The file is small; it is read fully and closed
+    /// at once, so the handle lives for microseconds.
+    /// </summary>
+    private static MemoryStream? ReadShared(string path)
+    {
+        try
+        {
+            using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var content = new MemoryStream();
+            file.CopyTo(content);
+            content.Position = 0;
+            return content;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
+    }
 
     /// <summary>
     /// Binds configuration text exactly as <see cref="Load"/> binds the file, without validating values. The tray uses it to
@@ -60,9 +94,10 @@ internal static class VigilConfiguration
                 configuration.GetSection(LinuxSection).Get<LinuxOptions>() ?? new LinuxOptions());
         }
         catch (Exception ex) when (ex is FormatException or InvalidDataException or InvalidOperationException
-            or IOException or UnauthorizedAccessException)
+            or IOException or UnauthorizedAccessException or JsonException)
         {
-            // The JSON provider wraps the parser error (which carries line and position) as an inner exception.
+            // The file provider wrapped the parser error (which carries line and position) as an inner exception; the stream provider
+            // lets the JsonException through as it is. Either way the innermost message is the parser's.
             var root = ex;
             while (root.InnerException is { } inner)
             {
