@@ -58,8 +58,17 @@ Layer responsibilities:
 Single instance and IPC: `IpcServer` holds an exclusive lock on `vigil.sock.lock` for the daemon's lifetime. Only
 the lock holder may delete or recreate the socket, and a second daemon fails at the lock. The IPC server is
 registered before `PresenceWorker`, so a second daemon fails before anything can inject or write the activity log.
-The server also makes its directory 0700 itself before binding, serves clients concurrently (limit 8, 5 s
-timeout each), and never lets an accept or handler error end the loop.
+The server also makes its directory 0700 itself before binding, serves clients concurrently (limit 8), and never
+lets an accept or handler error end the loop. The 5 s limit of a connection covers only reading the request and writing the
+response (both through `CreateTimeLimit`), not the handler: `IIpcHandler.HandleAsync` runs under the daemon's stopping token only,
+because `IpcCommand.RequestPermission` waits for a person; its handler bounds the wait itself (`IpcTimeouts`: the client waits 6 min
+for that one command and 5 s for every other, the daemon ends a pending request after 5 min 30 s, so its answer always comes first).
+A pending request holds one of the 8 slots, and the server watches its connection (`HandleWatchingClientAsync`, only for commands
+where `IpcTimeouts.IsLongRunning`): the client sends nothing after its request line, so a read that completes with zero bytes means the
+peer closed it (`Socket.Receive` documentation: after a remote shutdown the call "will complete immediately and return zero bytes"), and
+a broken connection fails the read. Either cancels the handler's token, and the portal request is closed (`PortalClient.RequestAsync`
+closes the Request on cancellation), so a Ctrl+C on the CLI removes the dialog and frees the slot. The daemon logs the request and its
+outcome in `IpcHandler` (Information when granted, Warning otherwise; never the token).
 
 Logging: `RotatingFileLoggerProvider` (one `RotatingFileWriter` shared by all loggers) writes `vigil.log` in the
 console's single-line layout, next to the console logger. A line that would take the file over 1 MiB first moves it
@@ -312,14 +321,22 @@ native declarations by layout tests, and the binary starts headless in CI.
   the `restore_token`, Start with an empty `parent_window`, NotifyPointerMotion, NotifyKeyboardKeysym) and the Request path
   (`.../request/SENDER/TOKEN`); `PortalClient` runs the three requests, subscribing to each `Response` signal before the call;
   `PortalSessionManager` holds the policy: the daemon (`Silent`) never lets a dialog stay (15 s, then `Request.Close` and the
-  token is deleted), only `RequestConsent` (`Interactive`, `vigil permissions request`) waits for the user, and the token the
-  portal returns replaces the one that was used. The RemoteDesktop interface also offers `ConnectToEIS` (libei), which its
+  token is deleted), only `RequestConsentAsync` (`Interactive`) waits for the user, and the token the portal returns replaces the
+  one that was used. `RequestConsentAsync` runs in the daemon, only for `IpcCommand.RequestPermission` (`IpcHandler.HandleAsync`, from
+  `vigil permissions request`; `PlatformServices.DaemonConsent`, set only for the portal backend): one request at a time (a second gets
+  `ConsentOutcome.InProgress`), the new session replaces the open one and is the one injected through, and while a request waits
+  `Inject` does not start a session from the saved token (it would use the token up). The CLI never asks the portal itself on this
+  backend (`PortalInputBackend.RequestAccess` only reports whether a consent exists); without a daemon it prints how to start one and
+  exits 1. macOS keeps asking in the CLI process (TCC attributes the prompt to the bundle); Windows, X11 and uinput have no
+  `DaemonConsent`, and a daemon without one rejects the command. The portal answers Response 1 for a refusal and for a cancelled dialog
+  alike, so `Cancelled` covers both; `Denied` is a consent without the device the strategy needs. If the CLI is interrupted the daemon cancels
+  the request (see the IPC paragraph above). The RemoteDesktop interface also offers `ConnectToEIS` (libei), which its
   description recommends over the D-Bus `Notify*` methods; Vigil uses the D-Bus methods because they need no fd passing and no
-  extra library, and the interface keeps them for this use. Open question for a real desktop: the portal derives a host
+  extra library, and the interface keeps them for this use. Why the daemon asks: the portal derives a host
   application's identity from the process's systemd unit (`shared/xdp-app-info-host.c`) and scopes a restore token to it
   (`xdp-session-persistence.c`, `get_persistent_permissions` looks the token up under `session->app_id`), so a consent given
-  from a terminal may not restore in `vigil.service`. The README documents the `systemd-run --user --scope` workaround; the
-  alternatives (ask the running daemon to do the request over IPC, or register an application id) were not built.
+  from a terminal may not restore in `vigil.service`; the request therefore runs in the daemon. Still unverified on a real desktop:
+  that the daemon's consent restores after a restart (registering an application id was not built).
 - **uinput** (`Uinput/`): ioctl numbers are computed by `IoctlNumber` with the generic layout (x86 and arm64) and pinned to the
   known values by `LinuxNativeLayoutTests`. The input core drops an `EV_REL` event with value 0 and a key release for a key that
   is not down (`input_get_disposition` in `drivers/input/input.c`), so the nudge is +1/-1 and the F15 event is press and release.
@@ -411,7 +428,8 @@ by the owner first.
 3. Least privilege. Never require root or administrator rights (on Windows everything is per user: HKEY_CURRENT_USER and
    the user's profile; on Linux the unit is a user unit, and Vigil never installs the udev rule or the group that the optional
    `uinput` backend needs: the user does that, with their own `sudo`, and selects the backend in `config.json`). A prompt may only
-   be started by `vigil permissions request` (macOS Accessibility, Linux portal consent); `IPermissionProbe` never prompts, and
+   be started by `vigil permissions request` (macOS Accessibility in the CLI process; the Linux portal consent in the daemon, run only in
+   answer to `IpcCommand.RequestPermission`); `IPermissionProbe` never prompts, and
    the daemon's portal start is bounded and closes the request instead of leaving a dialog (`PortalSessionManager`).
 4. Data stays local. The activity log stores counters and timestamps only, never content, only in the per-user
    data directory (0700; files 0600), and must stay switchable via `ActivityLog.Enabled`. The IPC socket is

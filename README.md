@@ -419,24 +419,21 @@ unit once with `vigil install`. No step needs root, except the optional `uinput`
    vigil permissions request
    ```
 
-   Your desktop shows a dialog; allow it. Vigil saves the portal's restore token in `portal-restore-token` in the
-   [data directory](#files-vigil-creates) (mode 0600), and from then on the daemon starts its portal session with that token
-   after every restart without a dialog. Nothing but this command ever starts the dialog from Vigil's side. Without a saved
-   token the daemon shows `Degraded (PermissionMissing)`, as macOS does without its permission.
+   The daemon has to be running first (`vigil install` starts it, or use `vigil run`): the command does not ask the portal
+   itself, it asks the running daemon to do it and waits for your answer (up to 6 minutes). Your desktop shows the dialog;
+   allow it. The command prints whether the permission was granted, denied, cancelled or timed out and exits 0 only when it
+   was granted. Without a daemon it says so and exits 1. The daemon keeps the session it just got, so it works at once, and
+   Vigil saves the portal's restore token in `portal-restore-token` in the [data directory](#files-vigil-creates) (mode 0600);
+   from then on the daemon starts its portal session with that token after every restart without a dialog. Until a consent
+   is saved the daemon shows `Degraded (PermissionMissing)`, as macOS does without its permission. Only one request can wait
+   at a time; a second one is answered with "already in progress".
 
-   One thing to watch (not verified on a real desktop): the portal identifies an application by the systemd unit the
-   process runs in (xdg-desktop-portal, `shared/xdp-app-info-host.c`: a process in a unit named `app-...` with a matching
-   desktop file gets that application's identity, every other process gets none), and a saved consent only restores for the
-   same identity. A daemon started by `vigil install` runs in `vigil.service`, while a command typed in a terminal usually
-   runs in the terminal's own `app-...` scope, so the two can differ. If `vigil status` shows `Degraded (PermissionMissing)`
-   after a granted request, give the consent from the same kind of context as the daemon:
-
-   ```
-   systemd-run --user --scope vigil permissions request
-   ```
-
-   and start a daemon you run by hand the same way (`systemd-run --user --scope vigil run`). If you only use the unit from
-   `vigil install`, run the request through `systemd-run` as shown.
+   Why the daemon asks and not the command (not verified on a real desktop): the portal identifies an application by the
+   systemd unit the process runs in (xdg-desktop-portal, `shared/xdp-app-info-host.c`: a process in a unit named `app-...`
+   with a matching desktop file gets that application's identity, every other process gets none), and a saved consent only
+   restores for the same identity. A command typed in a terminal usually runs in the terminal's own `app-...` scope, while
+   the daemon runs in `vigil.service`, so a consent given from the terminal might not restore in the daemon. Because the
+   daemon makes the request itself, the consent belongs to the identity that has to use it.
 
 5. **Optional: the uinput fallback.** If your desktop has no portal with RemoteDesktop version 2 (or you do not want the
    dialog), Vigil can post through a virtual input device. This is something you set up yourself, with your own
@@ -498,7 +495,7 @@ vigil pause <duration>         Pause Vigil for a while, e.g. 30s, 15m, 1h, 1h30m
 vigil pause --until-tomorrow   Pause until the start of tomorrow's schedule window.
 vigil resume                   End a manual pause.
 vigil diag                     Print platform, idle time, permission and configuration.
-vigil permissions request      Ask for permission to post input events (macOS; Linux Wayland: the portal consent). Windows and X11 need none.
+vigil permissions request      Ask for permission to post input events (macOS; Linux Wayland: the portal consent, asked by the running daemon). Windows and X11 need none.
 vigil install [--force]        Start Vigil at login (macOS LaunchAgent, Windows Run key, Linux systemd user unit).
 vigil uninstall [--purge]      Stop Vigil and remove its autostart entry.
 ```
@@ -516,8 +513,9 @@ vigil uninstall [--purge]      Stop Vigil and remove its autostart entry.
   screen is locked and the machine is on battery (`unknown` when it cannot be determined). It posts nothing and
   shows no prompt. Exit code 0 if the configuration is valid, 2 if it is not.
 - `permissions request` is the only command that can make the OS show a permission prompt (macOS: the Accessibility
-  prompt; Linux Wayland: the portal's RemoteDesktop consent dialog, which it waits for up to 5 minutes). It exits 0 if
-  the permission is granted and 1 if not, with the reason. On Windows it prints that there is nothing to request and
+  prompt; Linux Wayland: the portal's RemoteDesktop consent dialog, which the running daemon shows and the command waits
+  for, up to 6 minutes; with no daemon running it prints how to start one and exits 1). It exits 0 if
+  the permission is granted and 1 if not, with the reason (denied, cancelled, timed out, already in progress). On Windows it prints that there is nothing to request and
   exits 0; on Linux X11 and uinput it only reports whether posting is possible.
 - `install` does only what is described under [Install on macOS](#install-on-macos) (run it from inside
   `Vigil.app`), [Install on Windows](#install-on-windows) (run it from the folder with `vigil.exe` and
@@ -652,7 +650,7 @@ All files live in one per-user data directory:
 | `vigil.sock.lock` | Lock file that guarantees a single daemon instance. | 0600 | access rules of the data directory |
 | `activity-YYYY-MM-DD.jsonl` | Daily activity record: one JSON line per event with timestamps and counters, no content. Deleted after `RetentionDays`. Not written when `ActivityLog.Enabled` is `false`. | 0600 | access rules of the data directory |
 | `vigil.log`, `vigil.log.1` | Daemon log and its one backup. See [Logs](#logs). Not written when the daemon runs under systemd on Linux: the journal keeps the log. | 0600 | access rules of the data directory |
-| `portal-restore-token` | Linux Wayland only: the desktop portal's restore token, one line of letters and digits, saved by `vigil permissions request` and renewed each time the daemon starts a session (the portal's tokens are single use). It lets the daemon restart without showing the consent dialog. Deleted when the portal does not accept it. | 0600 | not used |
+| `portal-restore-token` | Linux Wayland only: the desktop portal's restore token, one line of letters and digits, saved by the daemon when you run `vigil permissions request`, and renewed each time the daemon starts a session (the portal's tokens are single use). It lets the daemon restart without showing the consent dialog. Deleted when the portal does not accept it. | 0600 | not used |
 
 On Windows Vigil sets no access rules of its own: the data directory inherits them from its parent, and the default
 `%LOCALAPPDATA%` is inside your user profile, which other standard users cannot open by default (not yet checked on a
@@ -789,9 +787,9 @@ without GNOME: there is no idle source Vigil can read, see [Idle time and batter
 
 **Linux: `Degraded (PermissionMissing)` on Wayland.** There is no saved portal consent (`vigil diag` shows
 `Portal consent: none saved`) or the portal did not accept the saved one and Vigil removed it. Run
-`vigil permissions request` and allow the dialog. If you did and it comes back after a restart, see the note on
-application identity under [Install on Linux](#install-on-linux), step 4, and request the consent through
-`systemd-run --user --scope`. If the request says the portal returned no restore token, the backend of your desktop does not
+`vigil permissions request` and allow the dialog. If you did and it comes back after a restart, the portal did not accept
+the saved consent for the daemon; run the request again (it is always made by the daemon itself, see the note on application
+identity under [Install on Linux](#install-on-linux), step 4) and check what `vigil diag` shows (`Portal consent`, `Portal session`). If the request says the portal returned no restore token, the backend of your desktop does not
 support persistent permissions: use the `uinput` backend instead. If it says the portal is not on the session bus or has no
 RemoteDesktop interface, install `xdg-desktop-portal` and your desktop's backend.
 
