@@ -11,6 +11,8 @@ permissions:
 env:
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
   DOTNET_NOLOGO: 1
+  # See ci.yml: Directory.Build.targets already switches off Avalonia's build-time statistics; this repeats it.
+  AVALONIA_TELEMETRY_OPTOUT: 1
 
 jobs:
   package-macos:
@@ -58,21 +60,14 @@ jobs:
           RID: ${{ matrix.rid }}
         run: scripts/package-macos.sh "$RID"
 
-      # ditto keeps the bundle structure, permissions and the ad-hoc signature intact.
-      - name: Zip the app
-        env:
-          RID: ${{ matrix.rid }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          ditto -c -k --keepParent "artifacts/$RID/Vigil.app" "Vigil-${TAG#v}-$RID.zip"
-          ls -l "Vigil-${TAG#v}-$RID.zip"
-
+      # The zip, with Vigil.app and Vigil Tray.app side by side, is made by the script (ditto keeps the bundle structure,
+      # permissions and the ad-hoc signatures intact, and the script verifies both after unpacking it). Its name is
+      # Vigil-<version>-<rid>.zip, and the step above has checked that <version> is the tag.
       - name: Upload the zip
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-${{ matrix.rid }}
-          path: Vigil-*-${{ matrix.rid }}.zip
+          path: artifacts/${{ matrix.rid }}/Vigil-*-${{ matrix.rid }}.zip
           if-no-files-found: error
           retention-days: 7
 
@@ -218,9 +213,10 @@ jobs:
           cat > notes.md <<NOTES
           Vigil ${TAG#v}: macOS, Windows and Linux, unsigned.
 
-          - macOS: ad-hoc signed builds, no Developer ID signature and no Apple notarization. Use \`osx-arm64\` for Apple silicon and \`osx-x64\` for Intel. The Apple silicon build has not been tested on hardware.
+          - macOS: ad-hoc signed builds, no Developer ID signature and no Apple notarization. Use \`osx-arm64\` for Apple silicon and \`osx-x64\` for Intel. The Apple silicon build has not been tested on hardware. The zip holds \`Vigil.app\` (the daemon and the CLI) and \`Vigil Tray.app\` (the menu bar icon and settings window).
           - Windows: unsigned programs, so SmartScreen may warn. Use \`win-x64\` for Intel and AMD, \`win-arm64\` for Arm. These builds compile and pass their unit tests in CI but have not been verified on a real Windows machine yet. The arm64 build is cross-compiled and has not been run anywhere.
           - Linux: \`linux-x64\` and \`linux-arm64\` tarballs (Native AOT, glibc). They build and pass their unit tests in CI, and CI starts the binary once on a headless runner, where it reports the missing desktop cleanly, but they have not been verified on a real X11 or Wayland desktop yet. Wayland needs GNOME (the only compositor Vigil can read the idle time from) and a one-time consent with \`vigil permissions request\`; X11 needs libX11, libXss and libXtst.
+          - Tray: every package contains the tray (menu bar icon on macOS, notification area on Windows, StatusNotifierItem on Linux, which GNOME shows only with the AppIndicator extension). It is built and its packaging is checked in CI, but nobody has verified it on a real desktop of any of the three systems yet. Vigil never starts it by itself (see the README).
           - Check the SHA-256 of the file you downloaded against its line in \`SHA256SUMS\` (macOS: \`shasum -a 256 <file>\`, Linux: \`sha256sum -c --ignore-missing SHA256SUMS\`, Windows PowerShell: \`Get-FileHash <file>\`).
 
           How to install: see [Install on macOS](https://github.com/${REPO}/blob/${TAG}/README.md#install-on-macos), [Install on Windows](https://github.com/${REPO}/blob/${TAG}/README.md#install-on-windows) or [Install on Linux](https://github.com/${REPO}/blob/${TAG}/README.md#install-on-linux).

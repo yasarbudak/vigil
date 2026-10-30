@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Builds a Native AOT release and packs it into a tar.gz under artifacts/<rid>/.
+# Builds Native AOT releases and packs them into a tar.gz under artifacts/<rid>/.
 # Usage: scripts/package-linux.sh linux-x64|linux-arm64
 #
 # Output:
 #   artifacts/<rid>/vigil
-#   artifacts/<rid>/Vigil-<version>-<rid>.tar.gz   (a folder named Vigil holding vigil and LICENSE)
+#   artifacts/<rid>/tray/vigil-tray and the two .so files Avalonia needs next to it (Skia, HarfBuzz)
+#   artifacts/<rid>/Vigil-<version>-<rid>.tar.gz   (a folder named Vigil holding vigil, the tray folder, LICENSE and THIRD-PARTY-NOTICES.txt)
 #
 # Native AOT cannot compile across operating systems, so this runs on Linux, and it builds for the machine's own
 # architecture: x86_64 for linux-x64, aarch64 for linux-arm64. Cross-architecture on Linux needs a cross linker, the
@@ -13,8 +14,9 @@
 # CI builds linux-arm64 on a native Arm runner instead (ubuntu-24.04-arm, free for public repositories:
 # https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 #
-# The binary links the C library dynamically, so it needs a glibc at least as new as the one it was built against (the
-# build prints the version it found). Nothing is signed.
+# The binaries link the C library dynamically, so they need a glibc at least as new as the one they were built against (the
+# build prints the version it found, for vigil and for every file of the tray). The tray also needs libfontconfig1 and the X11
+# libraries at run time (README, "Install on Linux"); the build does not check for them. Nothing is signed.
 set -euo pipefail
 
 usage() {
@@ -47,8 +49,11 @@ fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT="$ROOT/src/Vigil/Vigil.csproj"
+TRAY_PROJECT="$ROOT/src/Vigil.Tray/Vigil.Tray.csproj"
 OUT="$ROOT/artifacts/$RID"
 PUBLISH_DIR="$OUT/publish"
+TRAY_PUBLISH_DIR="$OUT/publish-tray"
+TRAY_OUT="$OUT/tray"
 
 VERSION="$(dotnet msbuild "$PROJECT" -getProperty:Version -nologo | tr -d '[:space:]')"
 if ! [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]]; then
@@ -56,16 +61,18 @@ if ! [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]]; then
   exit 1
 fi
 
-if [ ! -f "$ROOT/LICENSE" ]; then
-  echo "the license file $ROOT/LICENSE is missing (the MIT license requires its notice in every distributed copy)" >&2
-  exit 1
-fi
+for notice in LICENSE THIRD-PARTY-NOTICES.txt; do
+  if [ ! -f "$ROOT/$notice" ]; then
+    echo "$ROOT/$notice is missing (the licenses of Vigil and of the components it ships require their notices in every distributed copy)" >&2
+    exit 1
+  fi
+done
 
 echo "Publishing Vigil $VERSION for $RID"
 
 # Only remove what this script created, and only below artifacts/.
 case "$OUT" in
-  "$ROOT"/artifacts/linux-*) rm -rf "$PUBLISH_DIR" "$OUT/vigil" "$OUT"/Vigil-*.tar.gz ;;
+  "$ROOT"/artifacts/linux-*) rm -rf "$PUBLISH_DIR" "$TRAY_PUBLISH_DIR" "$TRAY_OUT" "$OUT/vigil" "$OUT"/Vigil-*.tar.gz ;;
   *) echo "refusing to clean $OUT" >&2; exit 1 ;;
 esac
 
@@ -79,25 +86,47 @@ fi
 cp "$PUBLISH_DIR/vigil" "$OUT/vigil"
 chmod 755 "$OUT/vigil"
 
-# The newest glibc symbol version the binary asks for: the oldest distribution it can run on.
+# The tray: the program and the two native libraries the publish puts next to it (Avalonia loads them from its own folder).
+# Debug symbols stay behind.
+dotnet publish "$TRAY_PROJECT" -c Release -r "$RID" -o "$TRAY_PUBLISH_DIR" --nologo
+for required in vigil-tray libSkiaSharp.so libHarfBuzzSharp.so; do
+  if [ ! -f "$TRAY_PUBLISH_DIR/$required" ]; then
+    echo "the tray publish did not produce $TRAY_PUBLISH_DIR/$required" >&2
+    exit 1
+  fi
+done
+mkdir "$TRAY_OUT"
+cp "$TRAY_PUBLISH_DIR/vigil-tray" "$TRAY_PUBLISH_DIR/libSkiaSharp.so" "$TRAY_PUBLISH_DIR/libHarfBuzzSharp.so" "$TRAY_OUT/"
+chmod 755 "$TRAY_OUT/vigil-tray"
+chmod 644 "$TRAY_OUT/libSkiaSharp.so" "$TRAY_OUT/libHarfBuzzSharp.so"
+
+# The newest glibc symbol version the binaries ask for: the oldest distribution they can run on.
 if command -v objdump >/dev/null 2>&1; then
   GLIBC="$(objdump -T "$OUT/vigil" | grep -o 'GLIBC_[0-9][0-9.]*' | sort -uV | tail -n 1 || true)"
-  echo "Requires ${GLIBC:-no versioned glibc symbols}"
+  echo "vigil requires ${GLIBC:-no versioned glibc symbols}"
+  for file in "$TRAY_OUT"/*; do
+    GLIBC="$(objdump -T "$file" | grep -o 'GLIBC_[0-9][0-9.]*' | sort -uV | tail -n 1 || true)"
+    echo "tray/$(basename "$file") requires ${GLIBC:-no versioned glibc symbols}"
+  done
+  # What the tray's own libraries link to at run time. Only listed: the build machine need not have them.
+  objdump -p "$TRAY_OUT/libSkiaSharp.so" | grep NEEDED || true
 fi
 
 # The MIT license requires its notice in every distributed copy: it goes next to vigil.
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
-mkdir "$STAGE/Vigil"
+mkdir "$STAGE/Vigil" "$STAGE/Vigil/tray"
 cp "$OUT/vigil" "$STAGE/Vigil/vigil"
+cp "$TRAY_OUT"/* "$STAGE/Vigil/tray/"
 cp "$ROOT/LICENSE" "$STAGE/Vigil/LICENSE"
-chmod 755 "$STAGE/Vigil/vigil"
-chmod 644 "$STAGE/Vigil/LICENSE"
+cp "$ROOT/THIRD-PARTY-NOTICES.txt" "$STAGE/Vigil/THIRD-PARTY-NOTICES.txt"
+chmod 755 "$STAGE/Vigil/vigil" "$STAGE/Vigil/tray/vigil-tray"
+chmod 644 "$STAGE/Vigil/LICENSE" "$STAGE/Vigil/THIRD-PARTY-NOTICES.txt"
 
 # Owner 0 and sorted names, so the archive does not carry the build machine's user ids; gzip -n leaves out the file name and time.
 ARCHIVE="$OUT/Vigil-$VERSION-$RID.tar.gz"
 tar --sort=name --owner=0 --group=0 --numeric-owner -C "$STAGE" -cf - Vigil | gzip -n -9 > "$ARCHIVE"
 
 tar -tzvf "$ARCHIVE"
-ls -l "$OUT/vigil" "$ARCHIVE"
+ls -l "$OUT/vigil" "$TRAY_OUT"/* "$ARCHIVE"
 echo "Built $ARCHIVE"

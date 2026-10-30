@@ -14,6 +14,10 @@ indent_size = 2
 [*.md]
 trim_trailing_whitespace = false
 
+# Third-party license texts are kept exactly as their authors wrote them.
+[THIRD-PARTY-NOTICES.txt]
+trim_trailing_whitespace = false
+
 [*.cs]
 # Namespaces and usings
 csharp_style_namespace_declarations = file_scoped:warning
