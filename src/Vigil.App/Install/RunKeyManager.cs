@@ -8,11 +8,14 @@ namespace Vigil.Install;
 /// sign-in. Nothing here runs unless the user invokes <c>vigil install</c> or <c>vigil uninstall</c>. The registry and
 /// the running daemon are injected so tests never touch either. The rules mirror <see cref="LaunchAgentManager"/>:
 /// an entry that differs from what would be written is replaced only with <c>--force</c>, installing again with the
-/// same settings changes nothing, and <c>--purge</c> deletes only the default data directory.
+/// same settings changes nothing (except that a daemon that is not running is started), and <c>--purge</c> deletes only
+/// the default data directory. Like <c>launchctl bootstrap</c> on macOS, install starts the daemon right away.
 /// </summary>
 internal sealed class RunKeyManager(
     IRunKey runKey,
     IDaemonStopper daemon,
+    IDaemonProbe probe,
+    IDaemonLauncher launcher,
     VigilPaths paths,
     string defaultDataDirectory)
 {
@@ -41,13 +44,14 @@ internal sealed class RunKeyManager(
         }
 
         string command;
+        string arguments;
         try
         {
-            command = DaemonArguments.Build(
-                daemonPath,
-                string.Equals(Path.GetFullPath(paths.DataDirectory), Path.GetFullPath(defaultDataDirectory), StringComparison.OrdinalIgnoreCase)
-                    ? null
-                    : Path.GetFullPath(paths.DataDirectory));
+            var dataDirectory = string.Equals(Path.GetFullPath(paths.DataDirectory), Path.GetFullPath(defaultDataDirectory), StringComparison.OrdinalIgnoreCase)
+                ? null
+                : Path.GetFullPath(paths.DataDirectory);
+            command = DaemonArguments.Build(daemonPath, dataDirectory);
+            arguments = DaemonArguments.BuildArguments(dataDirectory);
         }
         catch (ArgumentException ex)
         {
@@ -65,17 +69,59 @@ internal sealed class RunKeyManager(
             return 1;
         }
 
-        if (identical)
+        var running = probe.IsRunning();
+        var wasRunning = running;
+        if (identical && running)
         {
-            output.WriteLine($"Already installed: {Location}");
+            output.WriteLine($"Already installed and running: {Location}");
             return 0;
         }
 
         InstallFiles.PrepareLog(paths);
-        runKey.Write(ValueName, command);
+
+        if (!identical)
+        {
+            // Replacing an entry (--force): stop the daemon before the value changes, as macOS unloads before replacing the
+            // plist, so the daemon that runs afterwards is the one the new value describes. If it cannot be stopped the old
+            // value stays.
+            if (existing is not null && running)
+            {
+                var stopped = daemon.Stop();
+                if (stopped.Outcome == DaemonStopOutcome.Failed)
+                {
+                    error.WriteLine($"vigil: could not stop the running Vigil daemon: {stopped.Detail}");
+                    error.WriteLine("The autostart entry was left as it was.");
+                    return 1;
+                }
+
+                running = false;
+            }
+
+            runKey.Write(ValueName, command);
+        }
+
+        // As on macOS, an entry that is already right but whose daemon is not running only gets the start. On a fresh
+        // install a daemon that is already running (for example `vigil run`) is left alone.
+        if (!running)
+        {
+            var started = launcher.Start(daemonPath, arguments);
+            if (!started.Succeeded)
+            {
+                error.WriteLine($"vigil: could not start {DaemonFileName} ({daemonPath}): {started.Detail}");
+                error.WriteLine($"The autostart entry is at {Location}. Start the daemon by running {DaemonFileName}; remove the entry with 'vigil uninstall'.");
+                return 1;
+            }
+        }
 
         output.WriteLine($"Installed: {Location}");
-        output.WriteLine($"Vigil now starts at your next sign-in. Start it now by running {daemonPath}. Log: {paths.LogPath}");
+        if (wasRunning && !running)
+        {
+            output.WriteLine("Stopped the running Vigil daemon to replace it.");
+        }
+
+        output.WriteLine(running
+            ? $"Vigil now starts at your next sign-in. A daemon was already running and was left alone. Log: {paths.LogPath}"
+            : $"Vigil is running now and starts at your next sign-in. Log: {paths.LogPath}");
         output.WriteLine("Remove it with 'vigil uninstall'.");
         return 0;
     }

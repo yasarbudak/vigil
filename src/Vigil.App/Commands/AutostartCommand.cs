@@ -84,6 +84,9 @@ internal static class AutostartCommand
     }
 
     [SupportedOSPlatform("windows")]
-    private static RunKeyManager CreateWindowsManager(VigilPaths paths) =>
-        new(new RunKey(), new IpcDaemonStopper(paths.SocketPath), paths, VigilPaths.DefaultDirectory());
+    private static RunKeyManager CreateWindowsManager(VigilPaths paths)
+    {
+        var daemon = new IpcDaemonStopper(paths.SocketPath); // One IPC probe for both stopping and "is it running".
+        return new RunKeyManager(new RunKey(), daemon, daemon, new ProcessDaemonLauncher(), paths, VigilPaths.DefaultDirectory());
+    }
 }

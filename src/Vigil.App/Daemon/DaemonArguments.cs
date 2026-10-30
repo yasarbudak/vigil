@@ -26,15 +26,25 @@ internal static class DaemonArguments
     public static string Build(string executablePath, string? dataDirectory)
     {
         var commandLine = Quote(executablePath, nameof(executablePath));
-        if (dataDirectory is not null)
+        var arguments = BuildArguments(dataDirectory);
+        if (arguments.Length > 0)
         {
-            commandLine += $" {DataDirectoryOption} {Quote(dataDirectory, nameof(dataDirectory))}";
+            commandLine += " " + arguments;
         }
 
         return commandLine.Length <= MaxCommandLineLength
             ? commandLine
             : throw new ArgumentException($"The command line is {commandLine.Length} characters long, more than the {MaxCommandLineLength} that a Run key value may have. Install Vigil in a folder with a shorter path.", nameof(executablePath));
     }
+
+    /// <summary>
+    /// Only the arguments part of <see cref="Build"/>: <c>--data-dir "&lt;directory&gt;"</c>, or an empty string without a
+    /// directory. <c>vigil install</c> starts the daemon with this very string, so the process it starts and the Run
+    /// key value cannot disagree.
+    /// </summary>
+    /// <exception cref="ArgumentException">The directory is not absolute or has a quote or control character.</exception>
+    public static string BuildArguments(string? dataDirectory) =>
+        dataDirectory is null ? string.Empty : $"{DataDirectoryOption} {Quote(dataDirectory, nameof(dataDirectory))}";
 
     /// <summary>Accepts no argument, or exactly <c>--data-dir</c> and an absolute path.</summary>
     /// <param name="problem">What is wrong when this returns false.</param>

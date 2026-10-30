@@ -22,13 +22,19 @@ internal interface IDaemonStopper
     DaemonStopResult Stop();
 }
 
+/// <summary>Whether a daemon already serves this data directory. Behind an interface so tests never talk to a real daemon.</summary>
+internal interface IDaemonProbe
+{
+    bool IsRunning();
+}
+
 /// <summary>
 /// Stops the daemon that serves this data directory by asking it over its IPC socket (<see cref="IpcCommand.Shutdown"/>),
 /// then waits until the socket stops answering. The daemon shuts down the way it does for Ctrl+C: stops accepting,
 /// finishes the poll in progress, releases the instance lock and closes its log. It is whichever daemon owns the
 /// socket, whether autostart started it or someone ran <c>vigil run</c>.
 /// </summary>
-internal sealed class IpcDaemonStopper(string socketPath, TimeSpan? timeout = null) : IDaemonStopper
+internal sealed class IpcDaemonStopper(string socketPath, TimeSpan? timeout = null) : IDaemonStopper, IDaemonProbe
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(100);
@@ -69,6 +75,22 @@ internal sealed class IpcDaemonStopper(string socketPath, TimeSpan? timeout = nu
         }
 
         return new DaemonStopResult(DaemonStopOutcome.Failed, $"The daemon was asked to stop and still answered after {limit.TotalSeconds:0} seconds.");
+    }
+
+    /// <summary>
+    /// True when something answers on the socket (the same probe <see cref="Stop"/> uses to wait for the end). A socket
+    /// that accepts but answers badly or too slowly counts as running: a second daemon would only fail at the instance lock.
+    /// </summary>
+    public bool IsRunning()
+    {
+        try
+        {
+            return IsAnswering(CancellationToken.None);
+        }
+        catch (OperationCanceledException)
+        {
+            return true;
+        }
     }
 
     private bool IsAnswering(CancellationToken cancellationToken)
