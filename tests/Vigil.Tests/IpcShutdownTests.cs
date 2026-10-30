@@ -87,7 +87,10 @@ public class IpcShutdownTests
         var result = await Task.Run(() => new IpcDaemonStopper(dir.Paths.SocketPath).Stop(), TestContext.Current.CancellationToken);
 
         Assert.Equal(DaemonStopOutcome.Stopped, result.Outcome);
-        Assert.Equal([IpcCommand.Shutdown], handler.Sent);
+        // Shutdown comes first. The stopper then probes with Status until the socket stops answering, and whether a
+        // probe arrives before the server has stopped depends on timing, so any number of Status probes may follow.
+        Assert.Equal(IpcCommand.Shutdown, handler.Sent[0]);
+        Assert.All(handler.Sent.Skip(1), command => Assert.Equal(IpcCommand.Status, command));
         Assert.False(File.Exists(dir.Paths.SocketPath));
     }
 
