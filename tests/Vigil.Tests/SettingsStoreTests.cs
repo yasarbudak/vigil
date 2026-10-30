@@ -385,12 +385,26 @@ public sealed class SettingsStoreTests : IDisposable
 
         for (var i = 0; i < 200; i++)
         {
-            Assert.True(store.Save(form with { Threshold = i % 2 == 0 ? "00:03:00" : "00:05:00" }).Saved);
+            var result = store.Save(form with { Threshold = i % 2 == 0 ? "00:03:00" : "00:05:00" });
+            Assert.True(result.Saved, string.Join(" ", result.Errors));
         }
 
         stop.Cancel();
         await reader;
         Assert.Equal(0, broken);
+    }
+
+    [Fact]
+    public void A_save_replaces_a_file_another_program_holds_open_and_that_reader_keeps_the_old_content()
+    {
+        _dir.WriteConfig("""{ "Vigil": { "Threshold": "00:03:00" } }""");
+        using var reader = new FileStream(_dir.Paths.ConfigPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+
+        var result = Store().Save(Defaults() with { Threshold = "00:06:00" });
+
+        Assert.True(result.Saved, string.Join(" ", result.Errors));
+        Assert.Equal("00:06:00", (string?)SavedFile()["Vigil"]!["Threshold"]);
+        Assert.Contains("00:03:00", new StreamReader(reader).ReadToEnd(), StringComparison.Ordinal); // On Windows the open handle still sees the old file.
     }
 
     [Fact]
