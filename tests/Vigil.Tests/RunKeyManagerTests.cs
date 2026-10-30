@@ -17,11 +17,14 @@ public sealed class RunKeyManagerTests : IDisposable
 
         public List<string> Calls { get; } = [];
 
+        public List<string>? Order { get; set; }
+
         public RunKeyValue? Read(string name) => Values.TryGetValue(name, out var value) ? value : null;
 
         public void Write(string name, string commandLine)
         {
             Calls.Add($"write {name}");
+            Order?.Add("write");
             Values[name] = new RunKeyValue(commandLine);
         }
 
@@ -32,15 +35,38 @@ public sealed class RunKeyManagerTests : IDisposable
         }
     }
 
-    private sealed class FakeDaemon : IDaemonStopper
+    private sealed class FakeDaemon : IDaemonStopper, IDaemonProbe
     {
+        public bool Running { get; set; }
+
+        public bool IsRunning() => Running;
+
         public DaemonStopResult Result { get; set; } = new(DaemonStopOutcome.NotRunning);
 
         public int StopCalls { get; private set; }
 
+        public List<string>? Order { get; set; }
+
         public DaemonStopResult Stop()
         {
             StopCalls++;
+            Order?.Add("stop");
+            return Result;
+        }
+    }
+
+    private sealed class FakeLauncher : IDaemonLauncher
+    {
+        public DaemonLaunchResult Result { get; set; } = new(true);
+
+        public List<(string Executable, string Arguments)> Starts { get; } = [];
+
+        public List<string>? Order { get; set; }
+
+        public DaemonLaunchResult Start(string executablePath, string arguments)
+        {
+            Starts.Add((executablePath, arguments));
+            Order?.Add("start");
             return Result;
         }
     }
@@ -48,6 +74,7 @@ public sealed class RunKeyManagerTests : IDisposable
     private readonly DirectoryInfo _root = Directory.CreateTempSubdirectory("vg");
     private readonly FakeRunKey _registry = new();
     private readonly FakeDaemon _daemon = new();
+    private readonly FakeLauncher _launcher = new();
     private readonly StringWriter _output = new();
     private readonly StringWriter _error = new();
     private readonly string _dataDirectory;
@@ -81,7 +108,7 @@ public sealed class RunKeyManagerTests : IDisposable
     private static string DaemonCommand(string vigilExe) => $"\"{Path.Combine(Path.GetDirectoryName(vigilExe)!, "vigild.exe")}\"";
 
     private RunKeyManager Manager(string? dataDirectory = null, string? defaultDirectory = null) =>
-        new(_registry, _daemon, new VigilPaths(dataDirectory ?? _dataDirectory), defaultDirectory ?? _dataDirectory);
+        new(_registry, _daemon, _daemon, _launcher, new VigilPaths(dataDirectory ?? _dataDirectory), defaultDirectory ?? _dataDirectory);
 
     [Fact]
     public void Fresh_install_writes_one_quoted_value_pointing_at_the_daemon_and_prepares_the_log()
@@ -95,9 +122,38 @@ public sealed class RunKeyManagerTests : IDisposable
         Assert.Equal(DaemonCommand(exe), _registry.Values[Name].Text);
         Assert.True(File.Exists(Path.Combine(_dataDirectory, "vigil.log")));
         Assert.Contains("next sign-in", _output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("running now", _output.ToString(), StringComparison.Ordinal);
         Assert.Contains(Path.Combine(_dataDirectory, "vigil.log"), _output.ToString(), StringComparison.Ordinal);
         Assert.Contains(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run\Vigil", _output.ToString(), StringComparison.Ordinal);
-        Assert.Equal(0, _daemon.StopCalls); // Installing never stops or starts a daemon.
+        Assert.Equal(0, _daemon.StopCalls); // Installing never stops a daemon.
+        Assert.Equal([(Path.Combine(Path.GetDirectoryName(exe)!, "vigild.exe"), "")], _launcher.Starts); // Started once, without arguments.
+    }
+
+    [Fact]
+    public void Fresh_install_with_a_custom_data_directory_starts_the_daemon_with_the_arguments_of_the_value()
+    {
+        var exe = MakeInstallFolder();
+        var custom = Path.Combine(_root.FullName, "elsewhere");
+
+        Manager(dataDirectory: custom, defaultDirectory: _dataDirectory).Install(exe, force: false, _output, _error);
+
+        var start = Assert.Single(_launcher.Starts);
+        Assert.Equal($"{DaemonCommand(exe)} {start.Arguments}", _registry.Values[Name].Text);
+        Assert.Equal($"--data-dir \"{custom}\"", start.Arguments);
+    }
+
+    [Fact]
+    public void Fresh_install_does_not_start_a_daemon_that_is_already_serving_the_data_directory()
+    {
+        var exe = MakeInstallFolder();
+        _daemon.Running = true;
+
+        var code = Manager().Install(exe, force: false, _output, _error);
+
+        Assert.Equal(0, code);
+        Assert.Equal([$"write {Name}"], _registry.Calls);
+        Assert.Empty(_launcher.Starts);
+        Assert.Contains("left alone", _output.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -134,17 +190,106 @@ public sealed class RunKeyManagerTests : IDisposable
     }
 
     [Fact]
-    public void Install_again_with_the_same_executable_is_a_no_op()
+    public void Install_again_with_the_same_executable_and_the_daemon_running_is_a_no_op()
     {
         var exe = MakeInstallFolder();
         Manager().Install(exe, force: false, _output, _error);
         _registry.Calls.Clear();
+        _launcher.Starts.Clear();
+        _daemon.Running = true;
 
         var code = Manager().Install(exe, force: false, _output, _error);
 
         Assert.Equal(0, code);
         Assert.Empty(_registry.Calls);
-        Assert.Contains("Already installed", _output.ToString(), StringComparison.Ordinal);
+        Assert.Empty(_launcher.Starts);
+        Assert.Contains("Already installed and running", _output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Install_again_with_the_daemon_not_running_only_starts_it()
+    {
+        var exe = MakeInstallFolder();
+        Manager().Install(exe, force: false, _output, _error);
+        _registry.Calls.Clear();
+        _launcher.Starts.Clear();
+
+        var code = Manager().Install(exe, force: false, _output, _error);
+
+        Assert.Equal(0, code);
+        Assert.Empty(_registry.Calls); // The value is not written again.
+        Assert.Single(_launcher.Starts);
+    }
+
+    [Fact]
+    public void A_failed_start_is_reported_with_exit_1_and_the_written_value_stays()
+    {
+        var exe = MakeInstallFolder();
+        _launcher.Result = new DaemonLaunchResult(false, "access denied");
+
+        var code = Manager().Install(exe, force: false, _output, _error);
+
+        Assert.Equal(1, code);
+        Assert.Contains("access denied", _error.ToString(), StringComparison.Ordinal);
+        Assert.Contains("vigil uninstall", _error.ToString(), StringComparison.Ordinal);
+        Assert.Equal(DaemonCommand(exe), _registry.Values[Name].Text); // As on macOS, where a failed bootstrap leaves the plist.
+        Assert.DoesNotContain("Installed:", _output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Forced_replace_with_a_running_daemon_stops_it_then_writes_then_starts()
+    {
+        var first = MakeInstallFolder("One");
+        var second = MakeInstallFolder("Two");
+        Manager().Install(first, force: false, _output, _error);
+        _launcher.Starts.Clear();
+        _daemon.Running = true;
+        _daemon.Result = new DaemonStopResult(DaemonStopOutcome.Stopped);
+        var order = new List<string>();
+        _daemon.Order = order;
+        _registry.Order = order;
+        _launcher.Order = order;
+
+        var code = Manager().Install(second, force: true, _output, _error);
+
+        Assert.Equal(0, code);
+        Assert.Equal(["stop", "write", "start"], order);
+        Assert.Equal(DaemonCommand(second), _registry.Values[Name].Text);
+        Assert.Equal(Path.Combine(Path.GetDirectoryName(second)!, "vigild.exe"), Assert.Single(_launcher.Starts).Executable);
+    }
+
+    [Fact]
+    public void Forced_replace_whose_stop_fails_leaves_the_value_and_starts_nothing()
+    {
+        var first = MakeInstallFolder("One");
+        var second = MakeInstallFolder("Two");
+        Manager().Install(first, force: false, _output, _error);
+        _registry.Calls.Clear();
+        _launcher.Starts.Clear();
+        _daemon.Running = true;
+        _daemon.Result = new DaemonStopResult(DaemonStopOutcome.Failed, "still answering");
+
+        var code = Manager().Install(second, force: true, _output, _error);
+
+        Assert.Equal(1, code);
+        Assert.Contains("still answering", _error.ToString(), StringComparison.Ordinal);
+        Assert.Empty(_registry.Calls);
+        Assert.Equal(DaemonCommand(first), _registry.Values[Name].Text);
+        Assert.Empty(_launcher.Starts);
+    }
+
+    [Fact]
+    public void A_refused_install_starts_nothing()
+    {
+        var first = MakeInstallFolder("One");
+        var second = MakeInstallFolder("Two");
+        Manager().Install(first, force: false, _output, _error);
+        _launcher.Starts.Clear();
+
+        Manager().Install(second, force: false, _output, _error);
+        Manager().Install(MakeInstallFolder("Three", withDaemon: false), force: false, _output, _error);
+
+        Assert.Empty(_launcher.Starts);
     }
 
     [Fact]
