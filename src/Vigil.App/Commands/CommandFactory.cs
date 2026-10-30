@@ -97,7 +97,7 @@ internal static class CommandFactory
 
     private static Command Permissions(VigilPaths paths)
     {
-        var request = new Command("request", "Ask the OS for permission to post input events (macOS; may show a system prompt). Windows needs none.");
+        var request = new Command("request", "Ask the OS for permission to post input events (macOS, and Wayland through the desktop portal; may show a system prompt). Windows and X11 need none.");
         request.SetAction(_ => PermissionsCommand.Request(paths, Console.Out, Console.Error));
 
         var command = new Command("permissions", "Manage the OS permission Vigil needs.");
@@ -113,7 +113,7 @@ internal static class CommandFactory
         };
         var command = new Command(
             "install",
-            "Start Vigil at login (macOS LaunchAgent, Windows Run key). Only runs when you call it; on macOS run it from inside Vigil.app, on Windows from the folder that holds vigil.exe and vigild.exe.");
+            "Start Vigil at login (macOS LaunchAgent, Windows Run key, Linux systemd user unit). Only runs when you call it; on macOS run it from inside Vigil.app, on Windows from the folder that holds vigil.exe and vigild.exe.");
         command.Options.Add(force);
         command.SetAction(parseResult =>
             AutostartCommand.Install(paths, parseResult.GetValue(force), Console.Out, Console.Error));

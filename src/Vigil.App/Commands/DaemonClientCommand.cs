@@ -16,7 +16,7 @@ internal static class DaemonClientCommand
                 return 1;
             }
 
-            StatusFormatter.Write(Console.Out, response.Status);
+            StatusFormatter.Write(Console.Out, response.Status, response.Platform);
             return 0;
         }
         catch (Exception ex) when (ex is DaemonNotRunningException or IOException or OperationCanceledException)

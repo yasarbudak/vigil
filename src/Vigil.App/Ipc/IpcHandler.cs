@@ -1,10 +1,11 @@
 using Microsoft.Extensions.Hosting;
 using Vigil.Core.Presence;
+using Vigil.Platform;
 
 namespace Vigil.Ipc;
 
 /// <summary>Maps IPC commands onto the presence engine and the daemon's lifetime.</summary>
-internal sealed class IpcHandler(PresenceEngine engine, IHostApplicationLifetime lifetime) : IIpcHandler
+internal sealed class IpcHandler(PresenceEngine engine, IHostApplicationLifetime lifetime, PlatformServices? platform = null) : IIpcHandler
 {
     public IpcResponse Handle(IpcRequest request)
     {
@@ -36,7 +37,7 @@ internal sealed class IpcHandler(PresenceEngine engine, IHostApplicationLifetime
             return Fail(ex.Message);
         }
 
-        return new IpcResponse(true, Status: engine.GetStatus());
+        return new IpcResponse(true, Status: engine.GetStatus(), Platform: platform?.Summary);
     }
 
     public void ResponseSent(IpcRequest request)

@@ -17,7 +17,8 @@ internal enum IpcCommand
 internal sealed record IpcRequest(IpcCommand Command, TimeSpan? Duration = null);
 
 /// <summary>One response per connection, sent as a single JSON line.</summary>
-internal sealed record IpcResponse(bool Ok, string? Error = null, PresenceStatus? Status = null);
+/// <param name="Platform">How the platform works in this daemon (the Linux session type and backends); null when there is nothing to add.</param>
+internal sealed record IpcResponse(bool Ok, string? Error = null, PresenceStatus? Status = null, string? Platform = null);
 
 internal interface IIpcHandler
 {

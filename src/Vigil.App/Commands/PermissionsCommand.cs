@@ -11,7 +11,7 @@ internal static class PermissionsCommand
     {
         try
         {
-            var platform = (platformFactory ?? PlatformServices.Create)(VigilConfiguration.Load(paths.ConfigPath).Platform);
+            var platform = (platformFactory ?? PlatformServices.Create)(VigilConfiguration.Load(paths.ConfigPath).Platform with { DataDirectory = paths.DataDirectory });
             if (platform.PermissionRequester is null)
             {
                 // A platform without a requester either needs no permission (Windows) or has none Vigil can ask for.
@@ -28,7 +28,7 @@ internal static class PermissionsCommand
             var granted = platform.PermissionRequester.RequestAccess();
             output.WriteLine(granted
                 ? "Permission to post input events is granted."
-                : "Permission not granted yet. Allow 'vigil' (or your terminal) in System Settings > Privacy & Security, then run 'vigil diag'.");
+                : platform.PermissionNotGrantedHint?.Invoke() ?? "Permission not granted.");
             return granted ? 0 : 1;
         }
         catch (PlatformNotSupportedException ex)

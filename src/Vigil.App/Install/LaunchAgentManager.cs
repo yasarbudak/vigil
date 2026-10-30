@@ -15,9 +15,6 @@ internal sealed class LaunchAgentManager(
     /// <summary>Same as the bundle identifier in the app's Info.plist (scripts/package-macos.sh).</summary>
     public const string Label = "io.github.yasarbudak.vigil";
 
-    private const UnixFileMode PlistMode =
-        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead; // 0644
-
     public string PlistPath => Path.Combine(launchAgentsDirectory, Label + ".plist");
 
     public int Install(string? executablePath, bool force, TextWriter output, TextWriter error)
@@ -126,26 +123,6 @@ internal sealed class LaunchAgentManager(
         return false;
     }
 
-    /// <summary>Writes a temporary file next to the target, sets 0644 and renames it over the target (rename(2) is atomic).</summary>
-    internal static void WriteAtomically(string path, string content)
-    {
-        var temporary = Path.Combine(Path.GetDirectoryName(path)!, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
-        try
-        {
-            using (var stream = new FileStream(temporary, InstallFiles.CreateOptions(FileMode.CreateNew, PlistMode)))
-            {
-                using var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(false));
-                writer.Write(content);
-                writer.Flush();
-                stream.Flush(flushToDisk: true);
-            }
-
-            InstallFiles.SetMode(temporary, PlistMode); // Independent of the umask.
-            File.Move(temporary, path, overwrite: true);
-        }
-        finally
-        {
-            File.Delete(temporary); // No-op after a successful move.
-        }
-    }
+    /// <summary>Writes the file atomically with mode 0644; see <see cref="InstallFiles.WriteAtomically"/>.</summary>
+    internal static void WriteAtomically(string path, string content) => InstallFiles.WriteAtomically(path, content);
 }

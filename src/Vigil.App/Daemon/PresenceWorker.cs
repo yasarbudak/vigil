@@ -20,6 +20,8 @@ internal sealed class PresenceWorker(
     // Seeded at startup, where the lock state is read once and reported by the startup warning below.
     private LockDetectionMonitor _lockDetection = new(initiallyKnown: true);
 
+    private readonly RepeatedFailureTracker _cycleFailures = new();
+
     /// <summary>
     /// Logs the startup lines here, not in <see cref="ExecuteAsync"/>: since .NET 10 the host runs ExecuteAsync on a
     /// thread-pool thread after StartAsync has returned, so a quick stop could cancel it before it logged anything
@@ -27,8 +29,19 @@ internal sealed class PresenceWorker(
     /// The activity log cleanup due at daemon start runs here for the same reason; later runs (day rollover) stay
     /// in the poll loop.
     /// </summary>
+    /// <exception cref="PlatformNotSupportedException">The platform says it cannot work in this process (Linux without a graphical session).</exception>
     public override Task StartAsync(CancellationToken cancellationToken)
     {
+        if (platform.StartupProblem is { } problem)
+        {
+            throw new PlatformNotSupportedException(problem);
+        }
+
+        if (platform.Summary is { } summary)
+        {
+            logger.LogInformation("Platform: {Summary}.", summary);
+        }
+
         logger.LogInformation(
             "Watching idle time every {Poll}s, acting at {Threshold}s idle.",
             options.PollInterval.TotalSeconds,
@@ -86,11 +99,18 @@ internal sealed class PresenceWorker(
         try
         {
             await cycle.RunOnceAsync(stoppingToken).ConfigureAwait(false);
+            if (_cycleFailures.Recovered())
+            {
+                logger.LogInformation("Presence cycle works again.");
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // One failed poll must not end the daemon; the next tick tries again.
-            logger.LogError(ex, "Presence cycle failed.");
+            // One failed poll must not end the daemon; the next tick tries again. The same failure at every poll is logged once.
+            if (_cycleFailures.ShouldLog(ex))
+            {
+                logger.LogError(ex, "Presence cycle failed (the same failure is not logged again until it changes or stops).");
+            }
         }
     }
 

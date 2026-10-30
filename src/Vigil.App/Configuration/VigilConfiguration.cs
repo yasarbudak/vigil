@@ -1,16 +1,17 @@
 using Microsoft.Extensions.Configuration;
 using Vigil.Core.Options;
 using Vigil.Platform;
+using Vigil.Platform.Linux;
 using Vigil.Platform.MacOS;
 using Vigil.Platform.Windows;
 
 namespace Vigil.Configuration;
 
 /// <summary>The bound contents of config.json.</summary>
-internal sealed record VigilSettings(VigilOptions Vigil, MacOSOptions MacOS, WindowsOptions Windows)
+internal sealed record VigilSettings(VigilOptions Vigil, MacOSOptions MacOS, WindowsOptions Windows, LinuxOptions Linux)
 {
-    /// <summary>What <see cref="PlatformServices.Create"/> needs.</summary>
-    public PlatformOptions Platform => new(MacOS, Windows);
+    /// <summary>What <see cref="PlatformServices.Create"/> needs (the caller adds the data directory).</summary>
+    public PlatformOptions Platform => new(MacOS, Windows, Linux);
 
     public IReadOnlyList<string> Validate() => Vigil.Validate();
 }
@@ -20,14 +21,16 @@ internal sealed class ConfigurationException(string message, Exception? inner = 
 
 /// <summary>
 /// The single place that reads and binds config.json. Layout: a "Vigil" section (<see cref="VigilOptions"/>),
-/// a "MacOS" section (<see cref="MacOSOptions"/>) and a "Windows" section (<see cref="WindowsOptions"/>). Every
-/// section is bound on every platform, so a bad value in one fails the load everywhere. A missing file means defaults.
+/// a "MacOS" section (<see cref="MacOSOptions"/>), a "Windows" section (<see cref="WindowsOptions"/>) and a "Linux" section
+/// (<see cref="LinuxOptions"/>). Every section is bound on every platform, so a bad value in one fails the load
+/// everywhere. A missing file means defaults.
 /// </summary>
 internal static class VigilConfiguration
 {
     private const string VigilSection = "Vigil";
     private const string MacOSSection = "MacOS";
     private const string WindowsSection = "Windows";
+    private const string LinuxSection = "Linux";
 
     /// <summary>Reads and binds the file without validating values. Throws <see cref="ConfigurationException"/> if it cannot.</summary>
     public static VigilSettings Load(string configPath)
@@ -41,7 +44,8 @@ internal static class VigilConfiguration
             return new VigilSettings(
                 configuration.GetSection(VigilSection).Get<VigilOptions>() ?? new VigilOptions(),
                 configuration.GetSection(MacOSSection).Get<MacOSOptions>() ?? new MacOSOptions(),
-                configuration.GetSection(WindowsSection).Get<WindowsOptions>() ?? new WindowsOptions());
+                configuration.GetSection(WindowsSection).Get<WindowsOptions>() ?? new WindowsOptions(),
+                configuration.GetSection(LinuxSection).Get<LinuxOptions>() ?? new LinuxOptions());
         }
         catch (Exception ex) when (ex is FormatException or InvalidDataException or InvalidOperationException
             or IOException or UnauthorizedAccessException)

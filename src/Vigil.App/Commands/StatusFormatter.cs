@@ -5,7 +5,7 @@ namespace Vigil.Commands;
 
 internal static class StatusFormatter
 {
-    public static void Write(TextWriter output, PresenceStatus status)
+    public static void Write(TextWriter output, PresenceStatus status, string? platform = null)
     {
         output.WriteLine($"State:           {Describe(status)}");
         output.WriteLine($"Last activity:   {FormatPoint(status.LastRealActivity, status.At)}");
@@ -13,6 +13,10 @@ internal static class StatusFormatter
         output.WriteLine(
             $"Today:           {status.InjectionsToday} injections, {FormatDuration(status.CoveredToday)} covered");
         output.WriteLine($"Screen lock:     {DescribeLockDetection(status)}");
+        if (platform is not null)
+        {
+            output.WriteLine($"Platform:        {platform}");
+        }
     }
 
     private static string DescribeLockDetection(PresenceStatus status) => (status.PauseOnLock, status.LockStateKnown) switch

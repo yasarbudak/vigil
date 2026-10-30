@@ -9,6 +9,9 @@ internal static class InstallFiles
 {
     private const UnixFileMode LogMode = UnixFileMode.UserRead | UnixFileMode.UserWrite; // 0600
 
+    private const UnixFileMode DefinitionMode =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead; // 0644
+
     /// <summary>Unix permission bits exist only on Unix; on Windows the file is created with the directory's inherited access rules.</summary>
     internal static FileStreamOptions CreateOptions(FileMode mode, UnixFileMode unixMode)
     {
@@ -57,6 +60,33 @@ internal static class InstallFiles
         SetMode(paths.LogPath, LogMode);
     }
 
+    /// <summary>
+    /// Writes a temporary file next to the target, sets 0644 and renames it over the target (rename(2) is atomic), for the
+    /// files the service managers read: the LaunchAgent plist and the systemd unit. A reader sees the old or the new content,
+    /// never half of it.
+    /// </summary>
+    internal static void WriteAtomically(string path, string content)
+    {
+        var temporary = Path.Combine(Path.GetDirectoryName(path)!, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            using (var stream = new FileStream(temporary, CreateOptions(FileMode.CreateNew, DefinitionMode)))
+            {
+                using var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(false));
+                writer.Write(content);
+                writer.Flush();
+                stream.Flush(flushToDisk: true);
+            }
+
+            SetMode(temporary, DefinitionMode); // Independent of the umask.
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally
+        {
+            File.Delete(temporary); // No-op after a successful move.
+        }
+    }
+
     /// <summary>Removes the data directory, but only when it is exactly the default Vigil directory.</summary>
     public static int Purge(VigilPaths paths, string defaultDataDirectory, TextWriter output, TextWriter error)
     {
@@ -64,7 +94,7 @@ internal static class InstallFiles
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         var target = Path.GetFullPath(paths.DataDirectory);
         var expected = Path.GetFullPath(defaultDataDirectory);
-        if (!string.Equals(target, expected, comparison) || !string.Equals(Path.GetFileName(expected), "Vigil", comparison))
+        if (!string.Equals(target, expected, comparison) || !IsDefaultDirectoryName(Path.GetFileName(expected), comparison))
         {
             error.WriteLine($"vigil: refusing to purge '{target}': it is not the default Vigil data directory '{expected}'. Remove it yourself if that is what you want.");
             return 1;
@@ -88,6 +118,10 @@ internal static class InstallFiles
         output.WriteLine($"Purged data directory: {target}");
         return 0;
     }
+
+    /// <summary>The default directory is named <c>Vigil</c> on macOS and Windows and <c>vigil</c> on Linux (XDG style); nothing else is purged.</summary>
+    private static bool IsDefaultDirectoryName(string name, StringComparison comparison) =>
+        string.Equals(name, "Vigil", comparison) || string.Equals(name, VigilPaths.DefaultDirectoryNameOnLinux, comparison);
 
     /// <summary>
     /// Deletes the directory. On Windows the daemon that was just stopped may still be closing its files, and a virus

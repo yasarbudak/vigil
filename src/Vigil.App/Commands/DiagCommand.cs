@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using Vigil.Configuration;
 using Vigil.Core.Abstractions;
 using Vigil.Platform;
+using Vigil.Platform.Linux;
 
 namespace Vigil.Commands;
 
@@ -38,12 +39,17 @@ internal static class DiagCommand
         PlatformServices platform;
         try
         {
-            platform = PlatformServices.Create(settings.Platform);
+            platform = PlatformServices.Create(settings.Platform with { DataDirectory = paths.DataDirectory });
         }
         catch (PlatformNotSupportedException ex)
         {
             output.WriteLine($"Supported:       no - {ex.Message}");
             return 1;
+        }
+
+        foreach (var detail in platform.Details?.Invoke() ?? [])
+        {
+            output.WriteLine($"{detail.Label,-16} {detail.Value}");
         }
 
         output.WriteLine($"Idle time:       {DescribeIdleTime(platform.Idle)}");
@@ -73,19 +79,23 @@ internal static class DiagCommand
         output.WriteLine($"Schedule:        {days}, {schedule.Start:HH:mm} to {schedule.End:HH:mm}");
         output.WriteLine($"Activity log:    {(options.ActivityLog.Enabled ? "enabled" : "disabled")}");
         output.WriteLine($"Log retention:   {options.ActivityLog.RetentionDays} days");
-        output.WriteLine(OperatingSystem.IsWindows()
-            ? $"Windows strategy: {settings.Windows.Strategy}"
+        output.WriteLine(
+            OperatingSystem.IsWindows() ? $"Windows strategy: {settings.Windows.Strategy}"
+            : OperatingSystem.IsLinux() ? $"Linux strategy:  {settings.Linux.Strategy}"
             : $"macOS strategy:  {settings.MacOS.Strategy}");
     }
 
-    /// <summary>The idle counter is the one read that can throw (a failed Win32 call); diag reports it instead of crashing.</summary>
+    /// <summary>
+    /// The idle counter is the one read that can throw (a failed Win32 call; on Linux no display, no X library, a compositor
+    /// without an idle monitor); diag reports it instead of crashing.
+    /// </summary>
     private static string DescribeIdleTime(IIdleSource idle)
     {
         try
         {
             return $"{idle.GetIdleTime().TotalSeconds:0.0} s";
         }
-        catch (Win32Exception ex)
+        catch (Exception ex) when (ex is Win32Exception or LinuxUnavailableException)
         {
             return $"unavailable ({ex.Message})";
         }

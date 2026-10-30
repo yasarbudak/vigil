@@ -10,6 +10,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Vigil.Core/Vigil.Core.csproj" />
+    <ProjectReference Include="../Vigil.Platform.Linux/Vigil.Platform.Linux.csproj" />
     <ProjectReference Include="../Vigil.Platform.MacOS/Vigil.Platform.MacOS.csproj" />
     <ProjectReference Include="../Vigil.Platform.Windows/Vigil.Platform.Windows.csproj" />
   </ItemGroup>
