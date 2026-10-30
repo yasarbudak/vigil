@@ -9,7 +9,6 @@ using Vigil.Core.Presence;
 using Vigil.Ipc;
 using Vigil.Logging;
 using Vigil.Platform;
-using Vigil.Platform.MacOS;
 
 namespace Vigil.Daemon;
 
@@ -22,7 +21,7 @@ internal static class DaemonHost
     /// The caller keeps ownership. Without it the host creates and disposes its own.
     /// </param>
     /// <exception cref="ConfigurationException">config.json is unreadable, malformed or has invalid values.</exception>
-    public static HostApplicationBuilder CreateBuilder(VigilPaths paths, Func<MacOSOptions, PlatformServices>? platformFactory = null, ILoggerProvider? fileLog = null)
+    public static HostApplicationBuilder CreateBuilder(VigilPaths paths, Func<PlatformOptions, PlatformServices>? platformFactory = null, ILoggerProvider? fileLog = null)
     {
         // Validated here, before anything is constructed: a bad config must stop the daemon before it can act.
         var settings = VigilConfiguration.LoadValidated(paths.ConfigPath);
@@ -52,7 +51,9 @@ internal static class DaemonHost
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton(settings.Vigil);
         services.AddSingleton(settings.MacOS);
-        services.AddSingleton(provider => (platformFactory ?? PlatformServices.Create)(provider.GetRequiredService<MacOSOptions>()));
+        services.AddSingleton(settings.Windows);
+        services.AddSingleton(settings.Platform);
+        services.AddSingleton(provider => (platformFactory ?? PlatformServices.Create)(provider.GetRequiredService<PlatformOptions>()));
 
         services.AddSingleton<IActivityLog>(provider =>
             settings.Vigil.ActivityLog.Enabled

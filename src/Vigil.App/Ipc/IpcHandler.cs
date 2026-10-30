@@ -1,9 +1,10 @@
+using Microsoft.Extensions.Hosting;
 using Vigil.Core.Presence;
 
 namespace Vigil.Ipc;
 
-/// <summary>Maps IPC commands onto the presence engine.</summary>
-internal sealed class IpcHandler(PresenceEngine engine) : IIpcHandler
+/// <summary>Maps IPC commands onto the presence engine and the daemon's lifetime.</summary>
+internal sealed class IpcHandler(PresenceEngine engine, IHostApplicationLifetime lifetime) : IIpcHandler
 {
     public IpcResponse Handle(IpcRequest request)
     {
@@ -24,6 +25,8 @@ internal sealed class IpcHandler(PresenceEngine engine) : IIpcHandler
                 case IpcCommand.Resume:
                     engine.Resume();
                     break;
+                case IpcCommand.Shutdown:
+                    break; // Acknowledged here; the stop itself happens in ResponseSent, after the client has the answer.
                 default:
                     return Fail($"Unknown command '{request.Command}'.");
             }
@@ -34,6 +37,14 @@ internal sealed class IpcHandler(PresenceEngine engine) : IIpcHandler
         }
 
         return new IpcResponse(true, Status: engine.GetStatus());
+    }
+
+    public void ResponseSent(IpcRequest request)
+    {
+        if (request.Command == IpcCommand.Shutdown)
+        {
+            lifetime.StopApplication();
+        }
     }
 
     private static IpcResponse Fail(string error) => new(false, error);

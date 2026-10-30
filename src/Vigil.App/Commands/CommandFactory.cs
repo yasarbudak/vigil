@@ -97,7 +97,7 @@ internal static class CommandFactory
 
     private static Command Permissions(VigilPaths paths)
     {
-        var request = new Command("request", "Ask macOS for permission to post input events (may show a system prompt).");
+        var request = new Command("request", "Ask the OS for permission to post input events (macOS; may show a system prompt). Windows needs none.");
         request.SetAction(_ => PermissionsCommand.Request(paths, Console.Out, Console.Error));
 
         var command = new Command("permissions", "Manage the OS permission Vigil needs.");
@@ -113,7 +113,7 @@ internal static class CommandFactory
         };
         var command = new Command(
             "install",
-            "Start Vigil at login (macOS LaunchAgent). Only runs when you call it; must be run from inside Vigil.app.");
+            "Start Vigil at login (macOS LaunchAgent, Windows Run key). Only runs when you call it; on macOS run it from inside Vigil.app, on Windows from the folder that holds vigil.exe and vigild.exe.");
         command.Options.Add(force);
         command.SetAction(parseResult =>
             AutostartCommand.Install(paths, parseResult.GetValue(force), Console.Out, Console.Error));

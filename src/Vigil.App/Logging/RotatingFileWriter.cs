@@ -10,8 +10,20 @@ namespace Vigil.Logging;
 /// </summary>
 /// <remarks>
 /// Safe to call from several threads. Logging must never take the daemon down, so an I/O failure drops the line and
-/// the file is reopened on the next write. New files are created 0600 on Unix and opened with
-/// <see cref="FileShare.Read"/> so <c>tail -f</c> works; each line is flushed immediately (the volume is tiny).
+/// the file is reopened on the next write. New files are created 0600 on Unix (on Windows they take the data
+/// directory's access rules, see <c>PrivateDirectory</c>) and opened with <see cref="FileShare.Read"/> so
+/// <c>tail -f</c> works; each line is flushed immediately (the volume is tiny).
+/// <para>
+/// Windows and readers: the file is held open for writing, so a reader has to open it with at least
+/// <see cref="FileShare.ReadWrite"/>. Renaming a file needs delete access, which Windows grants only if every other
+/// open handle was opened with <see cref="FileShare.Delete"/> (CreateFile, <c>dwShareMode</c>: FILE_SHARE_DELETE
+/// "enables subsequent open operations on a file to request delete access"; "Delete access allows both delete and
+/// rename operations"; https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea). That is
+/// the reader's choice, not the writer's: sharing delete on this handle would only let other programs rename the
+/// live log, and would not make a reader's handle share it. So when the rename is refused, <see cref="Rotate"/> falls
+/// back to copying the file to the backup and truncating it in place, which needs only the write sharing every reader
+/// already has. The reader then sees the file shrink, as <c>tail -f</c> does after a copy-and-truncate rotation.
+/// </para>
 /// </remarks>
 internal sealed class RotatingFileWriter : IDisposable
 {
@@ -109,8 +121,28 @@ internal sealed class RotatingFileWriter : IDisposable
     private FileStream Rotate()
     {
         Close();
-        File.Move(_path, BackupPath, overwrite: true);
+        try
+        {
+            File.Move(_path, BackupPath, overwrite: true);
+        }
+        catch (IOException) when (OperatingSystem.IsWindows())
+        {
+            // A reader holds the file without sharing delete (see the remarks); Unix renames regardless of readers.
+            CopyThenTruncate();
+        }
+
         return Open();
+    }
+
+    /// <summary>
+    /// The Windows fallback of <see cref="Rotate"/>. This process is the only writer, so nothing is appended between
+    /// the copy and the truncation. If the truncation fails the backup is already updated and the next write starts
+    /// over, which repeats the copy and is harmless.
+    /// </summary>
+    private void CopyThenTruncate()
+    {
+        File.Copy(_path, BackupPath, overwrite: true);
+        using var truncated = new FileStream(_path, FileMode.Truncate, FileAccess.Write, FileShare.ReadWrite);
     }
 
     private void Close()

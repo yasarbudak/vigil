@@ -1,6 +1,5 @@
 using Vigil.Core.Abstractions;
 using Vigil.Platform;
-using Vigil.Platform.MacOS;
 
 namespace Vigil.Tests;
 
@@ -28,5 +27,5 @@ internal sealed class TestPlatform : IIdleSource, IInputInjector, ISessionState,
 
     public bool CanPostEvents() => true;
 
-    public Func<MacOSOptions, PlatformServices> Factory => _ => new PlatformServices("test", this, this, this, this, null);
+    public Func<PlatformOptions, PlatformServices> Factory => _ => new PlatformServices("test", this, this, this, this, null);
 }

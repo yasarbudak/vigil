@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- WinExe: the Windows GUI subsystem, so starting the daemon never opens a console window. -->
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>vigild</AssemblyName>
+    <RootNamespace>Vigild</RootNamespace>
+    <PublishAot>true</PublishAot>
+    <IsAotCompatible>true</IsAotCompatible>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Vigil.App/Vigil.App.csproj" />
+  </ItemGroup>
+</Project>

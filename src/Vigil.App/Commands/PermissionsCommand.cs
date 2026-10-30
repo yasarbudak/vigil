@@ -6,13 +6,21 @@ namespace Vigil.Commands;
 internal static class PermissionsCommand
 {
     /// <summary>The only code path that may make the OS show a permission prompt.</summary>
-    public static int Request(VigilPaths paths, TextWriter output, TextWriter error)
+    /// <param name="platformFactory">Replaces the OS implementations; used by tests so no real permission prompt can appear.</param>
+    public static int Request(VigilPaths paths, TextWriter output, TextWriter error, Func<PlatformOptions, PlatformServices>? platformFactory = null)
     {
         try
         {
-            var platform = PlatformServices.Create(VigilConfiguration.Load(paths.ConfigPath).MacOS);
+            var platform = (platformFactory ?? PlatformServices.Create)(VigilConfiguration.Load(paths.ConfigPath).Platform);
             if (platform.PermissionRequester is null)
             {
+                // A platform without a requester either needs no permission (Windows) or has none Vigil can ask for.
+                if (platform.Permissions.CanPostEvents())
+                {
+                    output.WriteLine($"Nothing to request: {platform.Name} needs no permission to post input events.");
+                    return 0;
+                }
+
                 error.WriteLine("vigil: this platform has no permission to request.");
                 return 1;
             }

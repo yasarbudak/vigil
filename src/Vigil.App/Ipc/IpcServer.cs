@@ -15,7 +15,9 @@ namespace Vigil.Ipc;
 /// Ownership: the server holds an exclusive lock on <c>&lt;socket&gt;.lock</c> for its whole lifetime. That lock is
 /// the single-instance mechanism, so only the lock holder ever deletes or recreates the socket file.
 /// Access: the server makes sure the socket's directory is 0700 before binding, so there is no window in which
-/// the socket is reachable by other users; the socket file itself is then set to 0600.
+/// the socket is reachable by other users; the socket file itself is then set to 0600. On Windows there are no mode
+/// bits: the socket file and the lock file take the access rules of the data directory (see <see cref="PrivateDirectory"/>).
+/// AF_UNIX sockets need Windows 10 version 1803 or later; the path limit is 108 bytes there too.
 /// It implements <see cref="IHostedService"/> directly so that acquiring the lock happens inside
 /// <see cref="StartAsync"/> and a second daemon fails the host start before any other service runs.
 /// </remarks>
@@ -24,7 +26,9 @@ internal sealed class IpcServer : IHostedService, IDisposable
     internal const int MaxRequestBytes = 4096;
     internal const int MaxConnections = 8;
 
-    private const int MaxSocketPathBytes = 100; // sun_path is 104 bytes on macOS, 108 on Linux.
+    // sun_path is 104 bytes on macOS and 108 on Linux and Windows (afunix.h: UNIX_PATH_MAX 108, quoted in
+    // dotnet/runtime UnixDomainSocketEndPoint.Windows.cs), so the same limit is safe on all three.
+    private const int MaxSocketPathBytes = 100;
     private static readonly TimeSpan DefaultClientTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan AcceptRetryDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(5);
@@ -98,12 +102,14 @@ internal sealed class IpcServer : IHostedService, IDisposable
         {
             Mode = FileMode.OpenOrCreate,
             Access = FileAccess.ReadWrite,
-            Share = FileShare.None, // Exclusive: on Unix this is an advisory flock held until the stream is closed.
+            Share = FileShare.None, // Exclusive: on Unix an advisory flock, on Windows a share mode no other open can get past, held until the stream is closed.
         };
         if (!OperatingSystem.IsWindows())
         {
             options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
         }
+
+        // Windows: no mode bits; the lock file takes the data directory's access rules (see PrivateDirectory).
 
         try
         {
@@ -132,6 +138,8 @@ internal sealed class IpcServer : IHostedService, IDisposable
             {
                 File.SetUnixFileMode(_socketPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
             }
+
+            // Windows: no mode bits; the socket file takes the data directory's access rules (see PrivateDirectory).
 
             listener.Listen(backlog: MaxConnections);
         }
@@ -242,6 +250,11 @@ internal sealed class IpcServer : IHostedService, IDisposable
             var payload = JsonSerializer.SerializeToUtf8Bytes(response, VigilJsonContext.Default.IpcResponse);
             await stream.WriteAsync(payload, timeout.Token).ConfigureAwait(false);
             await stream.WriteAsync("\n"u8.ToArray(), timeout.Token).ConfigureAwait(false);
+
+            if (request is not null && response.Ok)
+            {
+                NotifyResponseSent(request);
+            }
         }
         catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
         {
@@ -250,6 +263,18 @@ internal sealed class IpcServer : IHostedService, IDisposable
         catch (Exception)
         {
             // Shutting down; the client is simply closed.
+        }
+    }
+
+    private void NotifyResponseSent(IpcRequest request)
+    {
+        try
+        {
+            _handler.ResponseSent(request);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Finishing IPC command {Command} failed.", request.Command);
         }
     }
 

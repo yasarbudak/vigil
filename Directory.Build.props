@@ -6,5 +6,8 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest-recommended</AnalysisLevel>
     <LangVersion>default</LangVersion>
+    <!-- The one version of every Vigil binary (vigil, vigild, the macOS bundle, the Windows zip). The packaging scripts and
+         the release workflow read it with: dotnet msbuild src/Vigil/Vigil.csproj -getProperty:Version -->
+    <Version>0.1.0</Version>
   </PropertyGroup>
 </Project>

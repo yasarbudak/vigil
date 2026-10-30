@@ -1,5 +1,7 @@
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 using Vigil.Configuration;
+using Vigil.Core.Abstractions;
 using Vigil.Platform;
 
 namespace Vigil.Commands;
@@ -36,7 +38,7 @@ internal static class DiagCommand
         PlatformServices platform;
         try
         {
-            platform = PlatformServices.Create(settings.MacOS);
+            platform = PlatformServices.Create(settings.Platform);
         }
         catch (PlatformNotSupportedException ex)
         {
@@ -44,7 +46,7 @@ internal static class DiagCommand
             return 1;
         }
 
-        output.WriteLine($"Idle time:       {platform.Idle.GetIdleTime().TotalSeconds:0.0} s");
+        output.WriteLine($"Idle time:       {DescribeIdleTime(platform.Idle)}");
         output.WriteLine($"Post events:     {(platform.Permissions.CanPostEvents() ? "granted" : "not granted (run 'vigil permissions request')")}");
         output.WriteLine($"Screen locked:   {Describe(platform.Session.IsScreenLocked(), "yes", "no")}");
         output.WriteLine($"On battery:      {Describe(platform.Session.IsOnBattery(), "yes", "no")}");
@@ -71,7 +73,22 @@ internal static class DiagCommand
         output.WriteLine($"Schedule:        {days}, {schedule.Start:HH:mm} to {schedule.End:HH:mm}");
         output.WriteLine($"Activity log:    {(options.ActivityLog.Enabled ? "enabled" : "disabled")}");
         output.WriteLine($"Log retention:   {options.ActivityLog.RetentionDays} days");
-        output.WriteLine($"macOS strategy:  {settings.MacOS.Strategy}");
+        output.WriteLine(OperatingSystem.IsWindows()
+            ? $"Windows strategy: {settings.Windows.Strategy}"
+            : $"macOS strategy:  {settings.MacOS.Strategy}");
+    }
+
+    /// <summary>The idle counter is the one read that can throw (a failed Win32 call); diag reports it instead of crashing.</summary>
+    private static string DescribeIdleTime(IIdleSource idle)
+    {
+        try
+        {
+            return $"{idle.GetIdleTime().TotalSeconds:0.0} s";
+        }
+        catch (Win32Exception ex)
+        {
+            return $"unavailable ({ex.Message})";
+        }
     }
 
     private static string Describe(bool? value, string whenTrue, string whenFalse) =>

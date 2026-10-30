@@ -18,8 +18,6 @@ internal sealed class LaunchAgentManager(
     private const UnixFileMode PlistMode =
         UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead; // 0644
 
-    private const UnixFileMode LogMode = UnixFileMode.UserRead | UnixFileMode.UserWrite; // 0600
-
     public string PlistPath => Path.Combine(launchAgentsDirectory, Label + ".plist");
 
     public int Install(string? executablePath, bool force, TextWriter output, TextWriter error)
@@ -62,7 +60,7 @@ internal sealed class LaunchAgentManager(
             return 0;
         }
 
-        PrepareLog();
+        InstallFiles.PrepareLog(paths);
 
         if (!identical)
         {
@@ -113,7 +111,7 @@ internal sealed class LaunchAgentManager(
 
         output.WriteLine(removed ? $"Uninstalled: {PlistPath}" : "Not installed, nothing to remove.");
 
-        return purge ? Purge(output, error) : 0;
+        return purge ? InstallFiles.Purge(paths, defaultDataDirectory, output, error) : 0;
     }
 
     private bool Unload(TextWriter error)
@@ -128,73 +126,13 @@ internal sealed class LaunchAgentManager(
         return false;
     }
 
-    /// <summary>Removes the data directory, but only when it is exactly the default Vigil directory.</summary>
-    private int Purge(TextWriter output, TextWriter error)
-    {
-        var target = Path.GetFullPath(paths.DataDirectory);
-        var expected = Path.GetFullPath(defaultDataDirectory);
-        if (target != expected || Path.GetFileName(expected) != "Vigil")
-        {
-            error.WriteLine($"vigil: refusing to purge '{target}': it is not the default Vigil data directory '{expected}'. Remove it yourself if that is what you want.");
-            return 1;
-        }
-
-        var directory = new DirectoryInfo(target);
-        if (directory.LinkTarget is not null)
-        {
-            error.WriteLine($"vigil: refusing to purge '{target}': it is a symbolic link.");
-            return 1;
-        }
-
-        if (!directory.Exists)
-        {
-            output.WriteLine($"Nothing to purge: {target} does not exist.");
-            return 0;
-        }
-
-        directory.Delete(recursive: true);
-        output.WriteLine($"Purged data directory: {target}");
-        return 0;
-    }
-
-    /// <summary>Creates the data directory (0700) and makes sure the log file exists and is 0600 before the daemon first appends to it.</summary>
-    private void PrepareLog()
-    {
-        paths.EnsureDataDirectory();
-        using (new FileStream(paths.LogPath, CreateOptions(FileMode.OpenOrCreate, LogMode)))
-        {
-        }
-
-        SetMode(paths.LogPath, LogMode);
-    }
-
-    /// <summary>Unix permission bits exist only on Unix; the Windows branch is never used, install is macOS only for now.</summary>
-    private static FileStreamOptions CreateOptions(FileMode mode, UnixFileMode unixMode)
-    {
-        var options = new FileStreamOptions { Mode = mode, Access = FileAccess.Write };
-        if (!OperatingSystem.IsWindows())
-        {
-            options.UnixCreateMode = unixMode;
-        }
-
-        return options;
-    }
-
-    private static void SetMode(string path, UnixFileMode mode)
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            File.SetUnixFileMode(path, mode);
-        }
-    }
-
     /// <summary>Writes a temporary file next to the target, sets 0644 and renames it over the target (rename(2) is atomic).</summary>
     internal static void WriteAtomically(string path, string content)
     {
         var temporary = Path.Combine(Path.GetDirectoryName(path)!, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
         try
         {
-            using (var stream = new FileStream(temporary, CreateOptions(FileMode.CreateNew, PlistMode)))
+            using (var stream = new FileStream(temporary, InstallFiles.CreateOptions(FileMode.CreateNew, PlistMode)))
             {
                 using var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(false));
                 writer.Write(content);
@@ -202,7 +140,7 @@ internal sealed class LaunchAgentManager(
                 stream.Flush(flushToDisk: true);
             }
 
-            SetMode(temporary, PlistMode); // Independent of the umask.
+            InstallFiles.SetMode(temporary, PlistMode); // Independent of the umask.
             File.Move(temporary, path, overwrite: true);
         }
         finally
