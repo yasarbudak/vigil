@@ -11,9 +11,10 @@ counter to verify that the event really reset it. If it did not, Vigil reports a
 instead of failing silently. It runs as a small background daemon controlled by a command-line interface.
 
 **Status:** macOS works today (verified on Intel; an Apple silicon build exists but has not been tested on
-hardware). Windows is implemented: it builds and is unit-tested in CI, and it has not yet been verified on a real
-Windows machine. Linux (X11 and Wayland via uinput) and a tray UI are planned. Nothing else is implemented yet: on
-other platforms `vigil` exits with a "not supported yet" message.
+hardware). Windows and Linux are implemented: they build and are unit-tested in CI, and CI also starts each Linux
+binary once on a headless runner to check that it reports the missing desktop cleanly. Neither has been verified on a
+real Windows machine or a real Linux desktop (X11 or Wayland) yet. A tray UI is planned. On other platforms `vigil` exits with a
+"not supported yet" message.
 
 ## Contents
 
@@ -23,6 +24,7 @@ other platforms `vigil` exits with a "not supported yet" message.
 - [Requirements and build from source](#requirements-and-build-from-source)
 - [Install on macOS](#install-on-macos)
 - [Install on Windows](#install-on-windows)
+- [Install on Linux](#install-on-linux)
 - [CLI reference](#cli-reference)
 - [Configuration](#configuration)
 - [Files Vigil creates](#files-vigil-creates)
@@ -40,8 +42,12 @@ The daemon polls the OS idle counter every `PollInterval` (default 5 s). While t
 
 1. Posts one invisible event, chosen by the injection strategy:
    - `MouseNudge` (default): on macOS moves the pointer +1 px and straight back, so the net movement is zero. On
-     Windows it posts one relative mouse move of zero pixels, so the pointer does not move at all.
-   - `F15KeyUp`: posts only the key-up of F15, an unassigned key.
+     Windows it posts one relative mouse move of zero pixels, so the pointer does not move at all. On Linux it moves
+     the pointer +1 px and straight back, like macOS (the Linux input core drops a zero-sized move, so a zero move is
+     not an option); with the pointer at the very edge of the screen the first move is clamped and the pointer ends
+     up one pixel off.
+   - `F15KeyUp`: posts only the key-up of F15, an unassigned key. With the Linux `uinput` backend it posts the
+     press and the release, because the kernel drops the release of a key that is not down.
 2. Waits `VerifyDelay` (default 500 ms) and re-reads the idle counter. The injection counts as verified when the
    idle time is below `VerifyDelay` plus 1 second.
 3. If verification fails, the post fails, or the permission is missing, the state becomes `Degraded` with the reason
@@ -90,6 +96,28 @@ injecting and says so). Vigil supports Windows 10 and later; the documentation s
 reversed on Windows 7 and Windows Server 2008 R2, and that is deliberately not compensated for. A session that is
 disconnected or switched away (fast user switching, a closed Remote Desktop window) is not treated as locked.
 
+### Screen lock detection (Linux)
+
+Lock detection reads the locked hint of your login session from systemd-logind
+(`org.freedesktop.login1.Session.LockedHint` on the system bus, for the caller's own session). It is a hint: the desktop
+environment sets it (`SetLockedHint`) when it locks and unlocks the screen. A desktop that never sets it reads as
+unlocked while locked, and Vigil cannot tell that case apart from a really unlocked screen. If logind cannot be reached
+or answers with something unexpected, the state is unknown and handled exactly like on macOS (Vigil keeps injecting and
+says so).
+
+### Idle time and battery (Linux)
+
+On X11 the idle time is the X server's own counter (MIT-SCREEN-SAVER, libXss). Wayland has no portable way to ask for it:
+Vigil reads it from GNOME's compositor (`org.gnome.Mutter.IdleMonitor.GetIdletime`, milliseconds), so **on Wayland only
+GNOME is supported**. KDE Plasma has `org.freedesktop.ScreenSaver.GetSessionIdleTime`, but its implementation refuses the
+call on Wayland (checked in kscreenlocker's source), and other Wayland compositors only offer a notification protocol,
+not a query. On such a session `vigil diag` shows `Idle time: unavailable` with that reason. On Wayland sessions of
+other desktops use an X11 session, or wait for a later release.
+
+Battery state comes from the kernel's `/sys/class/power_supply`: any online supply that is not a battery means external
+power; otherwise a discharging system battery means "on battery". The battery of a wireless mouse (scope `Device`) is
+ignored, a machine without a battery is never on battery, and an unreadable state is unknown.
+
 ### Activity counters
 
 Vigil counts injections and "covered" time per day, which `vigil status` shows as `Today`. Covered time is the
@@ -99,7 +127,7 @@ sleep, and any stretch in which injections were failing.
 ## Measured results
 
 These were measured by the author on macOS 15.8.1 (Intel), on 2026-10-28 and 2026-10-29. They describe one machine
-and one chat client, not a guarantee for every setup.
+and one chat client, not a guarantee for every setup. Nothing has been measured on Windows or Linux yet.
 
 - Without Vigil, Teams went Away after 5 minutes of idle time.
 - With Vigil (4 minute threshold, `MouseNudge`), Teams stayed Available through a 9-minute idle window.
@@ -118,6 +146,15 @@ Vigil must be safe for anyone to run. These are guarantees of the code, not inte
 - Talks to its own CLI over a Unix domain socket in your user directory, readable and writable by you only. On
   Windows there are no mode bits: the socket takes the access rules of its folder, `%LOCALAPPDATA%\Vigil` inside your
   profile.
+- On Linux, talks to a few local services over D-Bus. D-Bus is inter-process communication over a Unix domain socket on
+  your own machine, not network access, and Vigil only ever uses `unix:` bus addresses (a `tcp:` entry in
+  `DBUS_SESSION_BUS_ADDRESS` is skipped). The calls are exactly these, and nothing else:
+  on the session bus, `org.freedesktop.portal.Desktop` (RemoteDesktop: reads the properties `version` and
+  `AvailableDeviceTypes`, then `CreateSession`, `SelectDevices`, `Start`, `NotifyPointerMotion`, `NotifyKeyboardKeysym`,
+  `Request.Close` and `Session.Close`; Wayland with the portal backend only) and `org.gnome.Mutter.IdleMonitor`
+  (`GetIdletime`; Wayland sessions only); on the system bus, `org.freedesktop.login1` (the property `LockedHint` of your
+  own session). It subscribes to the portal's `Response` signal of its own requests and to `Session.Closed` of its own
+  session, and to nothing else.
 - Optionally keeps a daily counter file (number of injections, time covered) in the same directory, and deletes
   its own daily files after `ActivityLog.RetentionDays` (default 30).
 
@@ -128,13 +165,20 @@ Vigil must be safe for anyone to run. These are guarantees of the code, not inte
 - No reading of what you do. No event taps, no keystroke, mouse, window-title or screen reading. On macOS it does
   not need, and never asks for, Input Monitoring or Screen Recording. On Windows it installs no hooks
   (`SetWindowsHookEx`) and registers no raw input; it reads one value, the time of the last input event of its session.
-- No elevated rights. It never needs root or administrator access and runs with your user rights in your session.
+  On Linux it never reads the pointer position or any key, selects no X events, records nothing through XRecord or XInput,
+  opens no `/dev/input/event*` device and does not ask the portal for screen content: the portal session it opens is
+  asked for the keyboard and pointer *to post input*, never for a screen cast or the clipboard.
+- No elevated rights. It never needs root or administrator access and runs with your user rights in your session. The
+  optional Linux `uinput` backend needs access to `/dev/uinput`, which you grant yourself (a udev rule and a group,
+  below); Vigil never installs that rule and never asks for root.
 - No data leaves your machine. The activity log holds counters and timestamps only, no content, and lives in the
   single per-user directory and is deleted after `Vigil.ActivityLog.RetentionDays` days. Set
   `Vigil.ActivityLog.Enabled` to `false` to store nothing.
-- No silent persistence. It never installs autostart, LaunchAgents, Run keys or login items on its own. The only way
-  one is created is you running `vigil install`; `vigil uninstall` removes it again. No other command, and no daemon
-  or update code path, touches `~/Library/LaunchAgents` or the Windows Run key.
+- No silent persistence. It never installs autostart, LaunchAgents, Run keys, systemd units or login items on its own. The
+  only way one is created is you running `vigil install`; `vigil uninstall` removes it again. No other command, and no
+  daemon or update code path, touches `~/Library/LaunchAgents`, the Windows Run key or `~/.config/systemd/user`. The
+  portal consent is the same: the dialog is only ever started by `vigil permissions request` (see below for the one
+  caveat).
 
 **Permissions requested**
 
@@ -142,8 +186,16 @@ Vigil must be safe for anyone to run. These are guarantees of the code, not inte
 | --- | --- |
 | macOS permission to post input events (listed under Accessibility in System Settings) | Required to inject the one event that resets the idle counter. Requested only by `vigil permissions request`. |
 | Windows: none | Windows asks no permission to post input, and Vigil never needs administrator rights. `vigil permissions request` says there is nothing to request. |
+| Linux X11: none | The XTest extension needs no permission. `vigil permissions request` only reports whether XTest is usable. |
+| Linux Wayland: the desktop portal's RemoteDesktop consent | A dialog of your desktop asks once whether Vigil may control keyboard and pointer. Requested only by `vigil permissions request`. The daemon uses the restore token that the portal returns (saved in `portal-restore-token`) to start its session after a restart without asking again. |
+| Linux `uinput` (opt-in): access to `/dev/uinput` | You set it up yourself with a udev rule and a group; Vigil never asks for it. |
 
-Nothing else is requested. On Windows, UIPI still applies: Vigil cannot inject input into a window that runs with
+Nothing else is requested. On Linux with the portal the daemon never opens the consent dialog by itself: it starts a
+session only if a restore token was saved by `vigil permissions request`, and the portal alone decides whether that token
+is still valid. If you revoked the consent (or the portal does not know the token), the portal may show the dialog
+for the daemon's start request; Vigil gives the portal 15 seconds, closes the request (which removes the dialog), deletes
+the saved token and shows `Degraded (PermissionMissing)` until you run `vigil permissions request` again. A consent you
+revoked can therefore make a dialog flash once. On Windows, UIPI still applies: Vigil cannot inject input into a window that runs with
 higher rights than Vigil (an elevated program in the foreground). Then the injection fails or is not verified and the
 state shows `Degraded`.
 
@@ -162,18 +214,32 @@ state shows `Degraded`.
   Microsoft documentation it was checked against), and the per-user Run key through `Microsoft.Win32.Registry`
   (`src/Vigil.Platform.Windows/Autostart/RunKey.cs`). `grep -rn "SetWindowsHook\|RawInput\|GetAsyncKeyState" src/`
   finds nothing.
-- Autostart: `LaunchAgentManager` and `RunKeyManager` are called only from `AutostartCommand` (`vigil install` and
-  `vigil uninstall`).
+- Linux system calls: the only libraries loaded are libX11, libXss and libXtst (`XOpenDisplay`, `XDefaultRootWindow`,
+  `XKeysymToKeycode`, `XSync`, `XSetErrorHandler`, `XFree`, `XCloseDisplay`, `XScreenSaverQueryExtension`,
+  `XScreenSaverAllocInfo`, `XScreenSaverQueryInfo`, `XTestQueryExtension`, `XTestFakeKeyEvent`,
+  `XTestFakeRelativeMotionEvent`; `src/Vigil.Platform.Linux/X11/X11NativeMethods.cs`, each with the header it was checked
+  against), `ioctl` and `write` on `/dev/uinput` (`src/Vigil.Platform.Linux/Uinput`), and D-Bus through the one NuGet
+  package Vigil uses for it, Tmds.DBus.Protocol, referenced only by `Vigil.Platform.Linux`
+  (`src/Vigil.Platform.Linux/DBus/TmdsDBusConnection.cs` is the only file that uses it). Files it reads: the four
+  attributes `type`, `online`, `status` and `scope` of `/sys/class/power_supply/*`, and (to tell whether its output is the
+  systemd journal) the link of its own `/proc/self/fd/1` and `/proc/self/fd/2`. `grep -rn "XQueryPointer\|XGrabKey\|XSelectInput\|XRecord\|/dev/input/event" src/` finds nothing.
+- Autostart: `LaunchAgentManager`, `RunKeyManager` and `SystemdUnitManager` are called only from `AutostartCommand`
+  (`vigil install` and `vigil uninstall`).
 - Files: everything Vigil writes is listed in [Files Vigil creates](#files-vigil-creates).
 
 ## Requirements and build from source
 
 - macOS 12.0 or later (`LSMinimumSystemVersion` in the app bundle), or Windows 10 version 1809 or later (the oldest
-  Windows 10 that .NET 10 supports and that has the Unix domain sockets Vigil uses, which arrived in version 1803).
+  Windows 10 that .NET 10 supports and that has the Unix domain sockets Vigil uses, which arrived in version 1803), or
+  64-bit Linux (x64 or arm64) with glibc, systemd for autostart, and, depending on the session: X11 with libX11, libXss
+  and libXtst (`libx11-6`, `libxss1`, `libxtst6` on Debian and Ubuntu), or Wayland on GNOME with `xdg-desktop-portal` and
+  the portal backend of your desktop (`xdg-desktop-portal-gnome`) at RemoteDesktop version 2 or newer. The release
+  binary asks for the glibc version printed by the packaging script; older distributions may be too old.
 - The .NET SDK version pinned in `global.json` (10.0.201, rolling forward to the latest feature band). Releases are
   built with Native AOT, so the platform's native toolchain for .NET Native AOT must be available (Xcode command line
   tools on macOS; on Windows the Visual Studio "Desktop development with C++" workload, plus the "C++ ARM64/ARM64EC
-  build tools" component to build `win-arm64` on an x64 machine).
+  build tools" component to build `win-arm64` on an x64 machine; on Linux `clang` and `zlib1g-dev`, and the architecture of
+  the target: `linux-arm64` is built on an Arm machine).
 
 ```
 git clone https://github.com/yasarbudak/vigil.git
@@ -182,6 +248,8 @@ scripts/package-macos.sh osx-x64      # Intel
 scripts/package-macos.sh osx-arm64    # Apple silicon (not yet tested on hardware)
 scripts/package-windows.ps1 win-x64   # Windows, Intel and AMD (PowerShell, on Windows)
 scripts/package-windows.ps1 win-arm64 # Windows on Arm (not yet run anywhere)
+scripts/package-linux.sh linux-x64    # Linux, Intel and AMD (on x86_64 Linux)
+scripts/package-linux.sh linux-arm64  # Linux on Arm (on aarch64 Linux)
 ```
 
 The macOS script publishes a Native AOT binary, assembles an app bundle, and signs it ad hoc. The result is
@@ -189,7 +257,8 @@ The macOS script publishes a Native AOT binary, assembles an app bundle, and sig
 programs, `vigil.exe` (the console program, every command) and `vigild.exe` (the same daemon without a console window,
 which autostart runs), and zips them: `artifacts/<rid>/vigil.exe`, `artifacts/<rid>/vigild.exe` and
 `artifacts/<rid>/Vigil-<version>-<rid>.zip` (the zip also holds the `LICENSE` file, as `Vigil.app/Contents/Resources/LICENSE`
-does on macOS). They are not signed.
+does on macOS). The Linux script publishes one Native AOT program and packs it with the `LICENSE` file:
+`artifacts/<rid>/vigil` and `artifacts/<rid>/Vigil-<version>-<rid>.tar.gz`. They are not signed.
 
 ## Install on macOS
 
@@ -311,6 +380,115 @@ Replace `vigil.exe` and `vigild.exe` in the same folder (stop the daemon first w
 not let you overwrite `vigild.exe` while it runs, then run `vigil install` again). If you move the folder, run
 `vigil install --force` from the new place. Windows needs no permission, so nothing has to be granted again.
 
+## Install on Linux
+
+Prebuilt, unsigned tarballs for `linux-x64` and `linux-arm64` will be attached to the
+[Releases](https://github.com/yasarbudak/vigil/releases) page once a version is tagged. Until then, build from source
+as described above. They are built and unit-tested in CI (the Arm build on a native Arm runner), CI starts each binary once
+on a headless runner, and neither has been verified on a real desktop yet. If something does not work on
+yours, `vigil diag` says which part cannot be reached.
+
+Vigil never starts itself. You can run `vigil run` in a terminal inside your desktop session, or install a systemd user
+unit once with `vigil install`. No step needs root, except the optional `uinput` setup, which is yours to do.
+
+1. **Put the binary somewhere permanent.** Unpack the tarball and move `vigil` to a place that stays, for example
+   `~/.local/bin/vigil` (and make sure that directory is on your `PATH`). `vigil install` points the unit at the
+   absolute path of the binary you run it from.
+
+   ```
+   tar -xzf Vigil-<version>-linux-x64.tar.gz
+   install -D Vigil/vigil ~/.local/bin/vigil
+   ```
+
+2. **Check the session.**
+
+   ```
+   vigil diag
+   ```
+
+   It shows the session type Vigil found (`XDG_SESSION_TYPE`, then `WAYLAND_DISPLAY`, then `DISPLAY`), where the idle time
+   comes from, which input backend is selected, and whether the idle time can be read right now.
+
+3. **X11 session.** Nothing to grant. Vigil needs `libX11.so.6`, `libXss.so.1` and `libXtst.so.6` (packages `libx11-6`,
+   `libxss1`, `libxtst6`); if one is missing `vigil diag` names it, and the daemon does not crash.
+
+4. **Wayland session (GNOME).** Input goes through the desktop portal's RemoteDesktop interface, which asks for your
+   consent once. Run, from inside your session:
+
+   ```
+   vigil permissions request
+   ```
+
+   Your desktop shows a dialog; allow it. Vigil saves the portal's restore token in `portal-restore-token` in the
+   [data directory](#files-vigil-creates) (mode 0600), and from then on the daemon starts its portal session with that token
+   after every restart without a dialog. Nothing but this command ever starts the dialog from Vigil's side. Without a saved
+   token the daemon shows `Degraded (PermissionMissing)`, as macOS does without its permission.
+
+   One thing to watch (not verified on a real desktop): the portal identifies an application by the systemd unit the
+   process runs in (xdg-desktop-portal, `shared/xdp-app-info-host.c`: a process in a unit named `app-...` with a matching
+   desktop file gets that application's identity, every other process gets none), and a saved consent only restores for the
+   same identity. A daemon started by `vigil install` runs in `vigil.service`, while a command typed in a terminal usually
+   runs in the terminal's own `app-...` scope, so the two can differ. If `vigil status` shows `Degraded (PermissionMissing)`
+   after a granted request, give the consent from the same kind of context as the daemon:
+
+   ```
+   systemd-run --user --scope vigil permissions request
+   ```
+
+   and start a daemon you run by hand the same way (`systemd-run --user --scope vigil run`). If you only use the unit from
+   `vigil install`, run the request through `systemd-run` as shown.
+
+5. **Optional: the uinput fallback.** If your desktop has no portal with RemoteDesktop version 2 (or you do not want the
+   dialog), Vigil can post through a virtual input device. This is something you set up yourself, with your own
+   `sudo`; Vigil never asks for root, never installs the rule below, and uses uinput only when you select it with
+   `"Linux": { "Backend": "Uinput" }` in `config.json`. Giving a user write access to `/dev/uinput` lets that user's programs
+   create devices that type and move the pointer, so only do it on a machine where you accept that.
+
+   ```
+   sudo groupadd -r uinput
+   sudo usermod -aG uinput "$USER"
+   echo 'KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="uinput", MODE="0660", OPTIONS+="static_node=uinput"' | sudo tee /etc/udev/rules.d/60-vigil-uinput.rules
+   echo uinput | sudo tee /etc/modules-load.d/uinput.conf
+   sudo modprobe uinput
+   sudo udevadm control --reload && sudo udevadm trigger
+   ```
+
+   Then log out and in again so the group applies, and check `vigil diag` (`uinput: /dev/uinput is writable`). The rule
+   is the usual udev form (`GROUP`, `MODE`, and `static_node` from udev(7)); adjust the group name to your policy.
+
+6. **Install autostart.** From the binary you want to keep:
+
+   ```
+   vigil install
+   ```
+
+   It writes `~/.config/systemd/user/vigil.service` (`$XDG_CONFIG_HOME/systemd/user` if that is set; mode 0644, written
+   atomically), runs `systemctl --user daemon-reload` and `systemctl --user enable --now vigil.service`, so Vigil also starts
+   immediately. The unit is part of your graphical session (`WantedBy=`, `PartOf=` and `After=graphical-session.target`),
+   starts `<binary> run`, and restarts it only after a crash (`Restart=on-abnormal`, 30 seconds apart): a deliberate exit,
+   such as an invalid `config.json` (exit code 2), is not restarted, so there is no restart loop. `vigil install` creates
+   the data directory; the log goes to the journal (see [Logs](#logs)).
+
+   `vigil install` refuses when there is no systemd user instance (it says so and writes nothing), and when a different
+   Vigil unit already exists (another binary location, another data directory) unless you pass `--force`. Running it again
+   from the same binary with the same settings changes nothing. If `VIGIL_DATA_DIR` is set when you install, the same
+   value is stored in the unit so that the daemon and your CLI use the same directory.
+
+7. **Verify.**
+
+   ```
+   vigil status
+   vigil diag
+   systemctl --user status vigil
+   journalctl --user -u vigil
+   ```
+
+### Updating
+
+Replace the binary, then run `vigil install --force` (it stops the running daemon, rewrites the unit and starts it again).
+If you only replaced the file at the same path, `systemctl --user restart vigil` is enough. The portal consent and the
+saved token stay valid; nothing has to be granted again.
+
 ## CLI reference
 
 ```
@@ -320,8 +498,8 @@ vigil pause <duration>         Pause Vigil for a while, e.g. 30s, 15m, 1h, 1h30m
 vigil pause --until-tomorrow   Pause until the start of tomorrow's schedule window.
 vigil resume                   End a manual pause.
 vigil diag                     Print platform, idle time, permission and configuration.
-vigil permissions request      Ask macOS for permission to post input events (Windows needs none).
-vigil install [--force]        Start Vigil at login (macOS LaunchAgent, Windows Run key).
+vigil permissions request      Ask for permission to post input events (macOS; Linux Wayland: the portal consent). Windows and X11 need none.
+vigil install [--force]        Start Vigil at login (macOS LaunchAgent, Windows Run key, Linux systemd user unit).
 vigil uninstall [--purge]      Stop Vigil and remove its autostart entry.
 ```
 
@@ -337,14 +515,17 @@ vigil uninstall [--purge]      Stop Vigil and remove its autostart entry.
   effective settings, the current idle time, whether the permission to post events is granted, and whether the
   screen is locked and the machine is on battery (`unknown` when it cannot be determined). It posts nothing and
   shows no prompt. Exit code 0 if the configuration is valid, 2 if it is not.
-- `permissions request` is the only command that can make macOS show a permission prompt. It exits 0 if the
-  permission is granted and 1 if not. On Windows it prints that there is nothing to request and exits 0.
+- `permissions request` is the only command that can make the OS show a permission prompt (macOS: the Accessibility
+  prompt; Linux Wayland: the portal's RemoteDesktop consent dialog, which it waits for up to 5 minutes). It exits 0 if
+  the permission is granted and 1 if not, with the reason. On Windows it prints that there is nothing to request and
+  exits 0; on Linux X11 and uinput it only reports whether posting is possible.
 - `install` does only what is described under [Install on macOS](#install-on-macos) (run it from inside
-  `Vigil.app`) or [Install on Windows](#install-on-windows) (run it from the folder with `vigil.exe` and
-  `vigild.exe`). `--force` replaces an existing autostart entry that differs from what would be written.
+  `Vigil.app`), [Install on Windows](#install-on-windows) (run it from the folder with `vigil.exe` and
+  `vigild.exe`) or [Install on Linux](#install-on-linux). `--force` replaces an existing autostart entry that differs from
+  what would be written.
 - `uninstall` is described under [Uninstall](#uninstall).
 
-On platforms other than macOS and Windows, `install` and `uninstall` exit 1 with "not supported yet".
+On platforms other than macOS, Windows and Linux, `install` and `uninstall` exit 1 with "not supported yet".
 
 ### Sample status output
 
@@ -354,7 +535,11 @@ Last activity:   09:37:42 (0s ago)
 Last injection:  none yet
 Today:           0 injections, 0s covered
 Screen lock:     detected, pausing while locked
+Platform:        X11 session, idle time from the X server (MIT-SCREEN-SAVER), input through X11 (XTest)
 ```
+
+The `Platform` line is shown on Linux only: it names the session type, where the idle time comes from and the input
+backend. `vigil diag` prints the same facts, line by line, plus whether each can be used right now.
 
 `State` shows the reason for `Paused` (`Paused (Manual)`, `Paused (OutsideSchedule)`, ...) and for `Degraded`. A
 manual pause shows its end time, for example `Paused (until 10:15:00)`. `Screen lock` is one of
@@ -364,7 +549,7 @@ manual pause shows its end time, for example `Paused (until 10:15:00)`. `Screen 
 ## Configuration
 
 Vigil reads an optional `config.json` from the data directory (macOS: `~/Library/Application Support/Vigil/`, Windows:
-`%LOCALAPPDATA%\Vigil\`, or `$VIGIL_DATA_DIR/config.json`). A missing file means defaults. It is the only configuration source: environment
+`%LOCALAPPDATA%\Vigil\`, Linux: `$XDG_DATA_HOME/vigil/`, by default `~/.local/share/vigil/`, or `$VIGIL_DATA_DIR/config.json`). A missing file means defaults. It is the only configuration source: environment
 variables and command-line options do not configure the daemon.
 
 Full example with every key at its default, except that `Schedule` is shown with a weekday window (without a
@@ -394,12 +579,16 @@ Full example with every key at its default, except that `Schedule` is shown with
   },
   "Windows": {
     "Strategy": "MouseNudge"
+  },
+  "Linux": {
+    "Strategy": "MouseNudge",
+    "Backend": "Auto"
   }
 }
 ```
 
-Both platform sections are read on every platform (a bad value in either stops the daemon), but only the one for the
-running OS has an effect.
+All three platform sections are read on every platform (a bad value in any of them stops the daemon), but only the one
+for the running OS has an effect.
 
 ### Keys
 
@@ -418,6 +607,8 @@ running OS has an effect.
 | `Vigil.ActivityLog.RetentionDays` | integer | `30` | 1 to 3650. |
 | `MacOS.Strategy` | `MouseNudge` or `F15KeyUp` | `MouseNudge` | Which invisible event is posted on macOS. |
 | `Windows.Strategy` | `MouseNudge` or `F15KeyUp` | `MouseNudge` | Which invisible event is posted on Windows. Whether Windows counts a zero-pixel mouse move as input has not been checked on a real machine; if the state shows `Degraded (VerificationFailed)`, set this to `F15KeyUp`. |
+| `Linux.Strategy` | `MouseNudge` or `F15KeyUp` | `MouseNudge` | Which invisible event is posted on Linux. Which one the X server or your compositor counts as input has not been checked on a real desktop; if the state shows `Degraded (VerificationFailed)`, try the other one. |
+| `Linux.Backend` | `Auto`, `X11`, `Portal` or `Uinput` | `Auto` | How input is posted (the idle time and lock state always follow the session type). `Auto`: XTest in an X11 session, the desktop portal in a Wayland session, never uinput. `X11` forces XTest (on Wayland it only reaches XWayland and `vigil diag` warns). `Portal` forces the portal. `Uinput` is the opt-in fallback described under [Install on Linux](#install-on-linux). |
 
 ### Schedule semantics
 
@@ -446,9 +637,12 @@ All files live in one per-user data directory:
 
 - macOS: `~/Library/Application Support/Vigil/`
 - Windows: `%LOCALAPPDATA%\Vigil\` (usually `C:\Users\<you>\AppData\Local\Vigil\`)
+- Linux: `$XDG_DATA_HOME/vigil/`, by default `~/.local/share/vigil/` (a relative `XDG_DATA_HOME` is ignored, as the
+  [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/) says). The data base is
+  used, not the state base, because the directory holds your own `config.json` next to the logs and counters.
 - Override: set the `VIGIL_DATA_DIR` environment variable. Use it, for example, to try a configuration without
   touching the real directory. If it is set when you run `vigil install`, the value is stored in the LaunchAgent
-  (macOS) or passed to `vigild.exe` as `--data-dir` (Windows).
+  (macOS), in the systemd unit (Linux) or passed to `vigild.exe` as `--data-dir` (Windows).
 
 | Path | Purpose | Unix mode | Windows |
 | --- | --- | --- | --- |
@@ -457,7 +651,8 @@ All files live in one per-user data directory:
 | `vigil.sock` | Local Unix domain socket the CLI uses to talk to the daemon. | 0600 | access rules of the data directory |
 | `vigil.sock.lock` | Lock file that guarantees a single daemon instance. | 0600 | access rules of the data directory |
 | `activity-YYYY-MM-DD.jsonl` | Daily activity record: one JSON line per event with timestamps and counters, no content. Deleted after `RetentionDays`. Not written when `ActivityLog.Enabled` is `false`. | 0600 | access rules of the data directory |
-| `vigil.log`, `vigil.log.1` | Daemon log and its one backup. See [Logs](#logs). | 0600 | access rules of the data directory |
+| `vigil.log`, `vigil.log.1` | Daemon log and its one backup. See [Logs](#logs). Not written when the daemon runs under systemd on Linux: the journal keeps the log. | 0600 | access rules of the data directory |
+| `portal-restore-token` | Linux Wayland only: the desktop portal's restore token, one line of letters and digits, saved by `vigil permissions request` and renewed each time the daemon starts a session (the portal's tokens are single use). It lets the daemon restart without showing the consent dialog. Deleted when the portal does not accept it. | 0600 | not used |
 
 On Windows Vigil sets no access rules of its own: the data directory inherits them from its parent, and the default
 `%LOCALAPPDATA%` is inside your user profile, which other standard users cannot open by default (not yet checked on a
@@ -465,8 +660,10 @@ real machine). A `VIGIL_DATA_DIR` outside your profile is only as private as its
 profile. Unix domain sockets on Windows also have a path limit of 108 bytes; Vigil refuses a longer socket path.
 
 Outside the data directory, `vigil install` writes
-`~/Library/LaunchAgents/io.github.yasarbudak.vigil.plist` on macOS, or the value `Vigil` under
-`HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run` on Windows, and nothing else does.
+`~/Library/LaunchAgents/io.github.yasarbudak.vigil.plist` on macOS, the value `Vigil` under
+`HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run` on Windows, or
+`~/.config/systemd/user/vigil.service` (`$XDG_CONFIG_HOME/systemd/user/vigil.service`) on Linux, and nothing else does.
+On Linux the consent itself is stored by the desktop portal, not by Vigil; the token file above is only the key to it.
 
 ## Logs
 
@@ -482,6 +679,17 @@ tail -f ~/Library/Application\ Support/Vigil/vigil.log          # macOS
 Get-Content -Wait "$env:LOCALAPPDATA\Vigil\vigil.log"           # Windows PowerShell
 ```
 
+Under systemd on Linux the log is the journal's, not a file: when the daemon's output is connected to the journal
+(Vigil checks `$JOURNAL_STREAM` against its own standard output and error, as systemd.exec(5) describes), it writes to the
+console only, in the format journald reads, so `journalctl -p warning` filters it, and journald timestamps, rotates and
+caps it. Read it with:
+
+```
+journalctl --user -u vigil            # add -f to follow
+```
+
+A `vigil run` in a terminal still writes `vigil.log` as before.
+
 On Windows the running daemon keeps `vigil.log` open for writing, so a program that reads it must open it with
 read and write sharing (a plain .NET `File.ReadAllText` does not, and fails while the daemon runs). The daemon renames
 the file when it rotates it, and Windows refuses a rename while another program holds the file open without sharing
@@ -495,7 +703,8 @@ following the file sees it shrink, as `tail -f` does.
 ~/Applications/Vigil.app/Contents/MacOS/vigil uninstall --purge    # ... and also delete the data directory
 ```
 
-On Windows run the same commands as `vigil.exe uninstall` and `vigil.exe uninstall --purge`.
+On Windows run the same commands as `vigil.exe uninstall` and `vigil.exe uninstall --purge`. On Linux run
+`vigil uninstall` and `vigil uninstall --purge`.
 
 - `vigil uninstall` on macOS unloads the LaunchAgent (stopping the daemon it started) and deletes the plist. If
   nothing is installed it says so and does nothing. The data directory is kept.
@@ -504,8 +713,12 @@ On Windows run the same commands as `vigil.exe uninstall` and `vigil.exe uninsta
   value. It stops whichever daemon serves the data directory, also one you started by hand with `vigil run` or
   `vigild.exe`. If the daemon cannot be stopped, the Run value is kept and the command exits 1. The data directory
   is kept.
+- `vigil uninstall` on Linux runs `systemctl --user disable --now vigil.service` (which stops the daemon the unit
+  started and removes the unit's links), deletes the unit file and runs `daemon-reload`. If the unit cannot be stopped, the file
+  is kept and the command exits 1. It does not stop a daemon you started by hand with `vigil run`. The data directory
+  is kept; the portal consent also stays at the portal (remove it in your desktop's privacy settings if you want it gone).
 - `--purge` additionally deletes the default data directory (`~/Library/Application Support/Vigil` on macOS,
-  `%LOCALAPPDATA%\Vigil` on Windows), including your `config.json`, the activity log and the daemon log. It deletes
+  `%LOCALAPPDATA%\Vigil` on Windows, `~/.local/share/vigil` or `$XDG_DATA_HOME/vigil` on Linux), including your `config.json`, the activity log and the daemon log. It deletes
   only that default directory: if `VIGIL_DATA_DIR` points somewhere else, or the directory is a symbolic link (on
   Windows also a junction), it refuses and tells you so. Stop any `vigil run` you started by hand first (on Windows
   `vigil uninstall` does that).
@@ -514,7 +727,7 @@ To remove Vigil completely:
 
 1. Run `vigil uninstall --purge` as above.
 2. macOS: delete `~/Applications/Vigil.app` and remove Vigil from System Settings, Privacy & Security, Accessibility.
-   Windows: delete the folder with `vigil.exe` and `vigild.exe`.
+   Windows: delete the folder with `vigil.exe` and `vigild.exe`. Linux: delete the `vigil` binary.
 
 ## Troubleshooting
 
@@ -566,13 +779,45 @@ recovers once you leave that window. The reason text in `vigil.log` repeats this
 `vigil.log`: a `vigild.exe` that starts and then stops (an invalid `config.json`, a second instance) writes the
 reason there, because it has no console.
 
+**Linux: `vigil diag` says `Idle time: unavailable`.** The message names the cause. No display or session type
+(`XDG_SESSION_TYPE`, `WAYLAND_DISPLAY` and `DISPLAY` are all unset): you are outside the desktop session (for example in
+an SSH login), or the systemd user manager does not have the session's environment. From inside the session run
+`systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE` (desktop sessions normally do this at
+start; not verified here) and then `systemctl --user restart vigil`. A daemon without a session in its environment
+exits with this message (exit code 1, not restarted). A missing library: install the package it names. On Wayland
+without GNOME: there is no idle source Vigil can read, see [Idle time and battery (Linux)](#idle-time-and-battery-linux).
+
+**Linux: `Degraded (PermissionMissing)` on Wayland.** There is no saved portal consent (`vigil diag` shows
+`Portal consent: none saved`) or the portal did not accept the saved one and Vigil removed it. Run
+`vigil permissions request` and allow the dialog. If you did and it comes back after a restart, see the note on
+application identity under [Install on Linux](#install-on-linux), step 4, and request the consent through
+`systemd-run --user --scope`. If the request says the portal returned no restore token, the backend of your desktop does not
+support persistent permissions: use the `uinput` backend instead. If it says the portal is not on the session bus or has no
+RemoteDesktop interface, install `xdg-desktop-portal` and your desktop's backend.
+
+**Linux: `Degraded (VerificationFailed)` or `(InjectionFailed)`.** The event was posted (or refused) but the idle counter
+did not reset. Try the other `Linux.Strategy`. `vigil diag` shows the backend in use; the daemon's reason is in the journal.
+On the `uinput` backend the first injection waits a second after creating the virtual device (the kernel documentation says
+userspace needs a moment to notice a new device), and a desktop that ignores a device with only a few keys or buttons will not
+count its events: that shows up as `VerificationFailed`.
+
+**Linux: `vigil install` says there is no systemd user instance.** Autostart on Linux is a systemd user unit, so it needs
+`systemctl --user` to work in your session. On a system without systemd, start `vigil run` from your session's own
+autostart mechanism.
+
+**Linux: the screen lock is not detected.** `Screen locked: unknown` means logind could not be read. `Screen locked: no`
+while the screen is locked means your desktop does not set the logind locked hint; see
+[Screen lock detection (Linux)](#screen-lock-detection-linux).
+
 **Windows: SmartScreen warns about `vigil.exe`.** The programs are not signed. Check the zip against `SHA256SUMS` from
 the release before you allow it.
 
 ## Roadmap
 
 - Verify the Windows build on real machines (x64 first, then Arm). Today it builds and passes its unit tests in CI.
-- Linux support, X11 and Wayland (via uinput).
+- Verify the Linux build on real desktops (X11 first, then GNOME on Wayland), measure which strategy each counts as input,
+  and confirm the portal consent survives a restart under the systemd unit.
+- Idle time on Wayland beyond GNOME (the `ext-idle-notify-v1` protocol, KDE Plasma, wlroots compositors).
 - Tray UI.
 
 ## Contributing and development
@@ -588,8 +833,8 @@ dotnet test
 The tests use a fake platform, so they never post real input events.
 
 Please do not run `vigil run`, `vigil permissions request`, `vigil install` or `vigil uninstall` on a development
-machine just to see them work: they post input events, may show a system prompt, or change your LaunchAgents or Run
-key. `vigil diag` is read only.
+machine just to see them work: they post input events, may show a system prompt, or change your LaunchAgents, Run
+key or systemd units. `vigil diag` is read only.
 
 ## License
 

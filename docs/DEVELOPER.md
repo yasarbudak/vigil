@@ -13,13 +13,18 @@ src/Vigil.Platform.MacOS    macOS implementations (LibraryImport P/Invoke to Cor
                             and the pure/OS-facing LaunchAgent pieces (plist, bundle check, launchctl)
 src/Vigil.Platform.Windows  Windows implementations (LibraryImport P/Invoke to user32, kernel32, wtsapi32), the pure
                             tick-count, session-flag and power-status logic, and the Run key behind `IRunKey`
+src/Vigil.Platform.Linux    Linux implementations: X11 (libX11, libXss, libXtst, loaded by name), the desktop portal, the
+                            GNOME idle monitor and logind over D-Bus (the one NuGet package, Tmds.DBus.Protocol, used in
+                            one file), uinput, sysfs battery, the systemd user unit and `ISystemctl`
 src/Vigil.App               the application: CLI, daemon host, IPC, config, activity log, install, platform
                             composition. A library; its entry points are `VigilApplication.RunCliAsync/RunDaemonAsync`
-src/Vigil                   `vigil` (macOS binary, `vigil.exe` on Windows): console head over Vigil.App, all commands
+src/Vigil                   `vigil` (macOS and Linux binary, `vigil.exe` on Windows): console head over Vigil.App, all commands
 src/Vigild                  `vigild.exe`: windowless (WinExe) head over Vigil.App that only runs the daemon (Windows)
 tests/Vigil.Core.Tests      engine, schedule, options, duration parser (hand-written fakes, no mocking library)
 tests/Vigil.Tests           app and platform layer: IPC server/client, activity log, config binding, daemon host with a
-                            fake platform, Windows pure logic and install flow with a fake registry
+                            fake platform, Windows pure logic and install flow with a fake registry, Linux pure logic
+                            (classifiers, D-Bus messages, the portal flow against a fake portal, unit rendering, install
+                            flow with a fake systemctl)
 ```
 
 Why two heads over a library: the Windows daemon must not open a console window, and that is a property of the
@@ -30,8 +35,8 @@ other would tie its build and publish to the other's, and sharing the files by l
 logic. The usual pattern is the one used here: every line of logic lives in the `Vigil.App` library and each executable
 is a `Program.cs` of a few lines. Only
 `VigilApplication` is public; the rest stays `internal`, and the tests see it through `InternalsVisibleTo`.
-`<Version>` is defined once, in `Directory.Build.props`, so `vigil`, `vigild` and the packages agree. macOS ships only
-`vigil`; `Vigild` builds on every OS (it is managed code until published) and is only published on Windows.
+`<Version>` is defined once, in `Directory.Build.props`, so `vigil`, `vigild` and the packages agree. macOS and Linux ship
+only `vigil`; `Vigild` builds on every OS (it is managed code until published) and is only published on Windows.
 
 Layer responsibilities:
 
@@ -40,7 +45,8 @@ Layer responsibilities:
   re-read idle, report). Core talks to the world only through `IIdleSource`, `IInputInjector`, `ISessionState`,
   `IPermissionProbe`, `IPermissionRequester` and `IActivityLog`.
 - **Platform.\*** implements those interfaces for one OS and nothing more. Each P/Invoke carries a comment naming
-  the SDK header (macOS) or the Microsoft Learn page (Windows) it was verified against. CoreFoundation objects are
+  the SDK header (macOS), the Microsoft Learn page (Windows) or the X.org and kernel header and documentation page (Linux)
+  it was verified against. CoreFoundation objects are
   owned by `CFTypeHandle` (SafeHandle). The one native buffer on Windows (`WTSQuerySessionInformationW`) is freed in a
   `finally` with `WTSFreeMemory`.
 - **Vigil.App** wires everything: `PlatformServices` (the only OS switch), `DaemonHost` (composition root),
@@ -61,6 +67,7 @@ to `vigil.log.1` (replacing it); an oversized file found at start is rotated fir
 every line and never throws: an I/O failure drops the line and the file is reopened on the next write. The LaunchAgent
 sets no `StandardOutPath` or `StandardErrorPath`, because a second writer (launchd) on the same file would break
 rotation; stdout and stderr are discarded under launchd. So everything that ends a run must also reach the logger:
+Under systemd (the output is the journal, see "Linux notes") there is no file and the console messages are the record.
 `DaemonHost.RunAsync` logs the config error (exit 2), a failed start such as a second instance (exit 1), unexpected
 exceptions (an exception filter that does not catch) and `AppDomain.UnhandledException`. Native crashes are covered by
 macOS crash reports, not by this log. Tests: `RotatingFileLogTests`.
@@ -111,6 +118,11 @@ platform analyzer (CA1416) is satisfied by `[SupportedOSPlatform("windows")]` on
 Linux machine, publish with `-r win-x64 -p:PublishAot=false -p:PublishTrimmed=true -p:SelfContained=true` (the ILLink
 analyzers run; the native compile does not).
 
+The Linux code compiles on every OS too (the P/Invoke declarations are source-generated and never run elsewhere; the Linux-only
+classes carry `[SupportedOSPlatform("linux")]` and are reached only behind `OperatingSystem.IsLinux()`). To see the trimming and AOT
+warnings of the Linux code on a Mac, publish with `-r linux-x64 -p:PublishAot=false -p:PublishTrimmed=true -p:SelfContained=true`;
+the native link itself only happens on Linux (`scripts/package-linux.sh`, CI).
+
 The SDK is pinned in `global.json`. `dotnet test` uses Microsoft Testing Platform because `global.json` sets
 `test.runner`; xUnit v3 supports it natively.
 
@@ -120,7 +132,7 @@ is read only and safe.
 
 ## Continuous integration
 
-Workflows live in `.github/workflows`:
+Workflows live in `.github/workflows` (the Linux jobs are described under "Packaging and autostart (Linux)"):
 
 - `ci.yml` runs on pushes to `main` and on pull requests. It builds and tests on Ubuntu, Windows and macOS
   (`dotnet build Vigil.slnx -c Release`, then `dotnet test --solution Vigil.slnx -c Release --no-build`; the Windows
@@ -134,6 +146,10 @@ Workflows live in `.github/workflows`:
   It builds all four packages, writes `Vigil-<version>-osx-x64.zip`, `Vigil-<version>-osx-arm64.zip`,
   `Vigil-<version>-win-x64.zip`, `Vigil-<version>-win-arm64.zip` and `SHA256SUMS`, and creates the GitHub Release with
   the preinstalled `gh` CLI. The release notes say the builds are unsigned and that Windows is not verified on hardware.
+
+`package-linux` (`ci.yml`, and in `release.yml`) runs `scripts/package-linux.sh` for `linux-x64` on `ubuntu-24.04` and for
+`linux-arm64` on `ubuntu-24.04-arm`, and `ci.yml` starts both binaries once with `diag` and the session variables removed.
+The release job adds the two `tar.gz` files to `SHA256SUMS` and to the release.
 
 Rules for these workflows: only official `actions/*` actions, each pinned to a full commit SHA with the version in a
 comment; `permissions: contents: read` at the top, `contents: write` only on the release job; `checkout` with
@@ -262,6 +278,97 @@ verified in `man launchd.plist` and `man launchctl`:
   symbolic link); a `VIGIL_DATA_DIR` override is never purged.
 - The label is also the bundle identifier; keep `LaunchAgentManager.Label` and the script's `BUNDLE_ID` equal.
 
+## Linux notes
+
+Everything below was checked against the source it names; do the same for a change, and do not write a signature, a D-Bus
+name or a constant from memory. **None of it has run on a real Linux desktop yet**: the logic is covered by unit tests, the
+native declarations by layout tests, and the binary starts headless in CI.
+
+- **Session type**: `SessionTypeDetector` decides in this order: `XDG_SESSION_TYPE` (`x11` or `wayland`; pam_systemd sets it),
+  then `WAYLAND_DISPLAY`, then `DISPLAY`. `XDG_SESSION_TYPE` and `WAYLAND_DISPLAY` come before `DISPLAY` because a Wayland session
+  also has `DISPLAY` (XWayland). `Linux.Backend` chooses only how input is posted; the idle source and the lock state follow
+  the session type. With no session in the environment `LinuxPlatformServices.StartupProblem` is set and the daemon refuses
+  to start (`PresenceWorker.StartAsync`, exit 1, which the unit does not restart); `vigil diag` still prints everything it can.
+- **X11** (`X11/`): the three libraries are probed with `NativeLibrary.TryLoad` before the first call
+  (`X11Libraries.CheckAvailable`), so a missing library is a message, not a crash. `XScreenSaverInfo` is allocated by
+  libXss (`XScreenSaverAllocInfo`) and read at the LP64 offsets pinned by `LinuxNativeLayoutTests`. Posting is
+  `XTestFakeRelativeMotionEvent` +1 and -1 (zero net movement) or the key-up of F15 (`XKeysymToKeycode` of keysym 0xffcc),
+  then `XSync` (which includes the flush) so that protocol errors reach the process's error handler before the call returns:
+  without an error handler Xlib exits the process. A lost X connection still ends the process (the Xlib I/O error handler may not
+  return); under the unit that is the end of the session. The X server does not drop a key release for a key that is not
+  down (`GetKeyboardEvents` in `dix/getevents.c` only drops a repeated press); whether the server's idle timer counts an XTest
+  event is what the run-time verification checks.
+- **Wayland idle**: only GNOME, `org.gnome.Mutter.IdleMonitor.GetIdletime` (uint64 milliseconds, from mutter's
+  `meta_idle_monitor_get_idletime`). KDE's `org.freedesktop.ScreenSaver.GetSessionIdleTime` exists, is documented in its XML
+  as `seconds` but returns the KIdleTime value, and answers `NotSupported` on Wayland (kscreenlocker `interface.cpp`), so it is not
+  used. A compositor without the monitor gives `LinuxUnavailableException` with that explanation.
+- **D-Bus** (`DBus/`): `DBusValue`, `DBusCall`, `DBusReply` and `DBusSignal` are Vigil's own small model, and
+  `IDBusConnection` is the seam; `TmdsDBusConnection` is the only file that uses Tmds.DBus.Protocol (0.95.2; the project has no
+  1.0 release, so expect API changes: the generic `Reader.ReadVariantValue` path and `MessageWriter` are used, not the methods
+  marked `Obsolete`/`RequiresUnreferencedCode`). Tests use `FakeDBusConnection` and `FakePortalConnection`; no test touches a
+  real bus. Only `unix:` addresses are accepted (`DBusAddresses`), so no D-Bus setting can make Vigil open a network
+  connection.
+- **Portal** (`Portal/`): `PortalProtocol` builds the calls (CreateSession, SelectDevices with `types` 3, `persist_mode` 2 and
+  the `restore_token`, Start with an empty `parent_window`, NotifyPointerMotion, NotifyKeyboardKeysym) and the Request path
+  (`.../request/SENDER/TOKEN`); `PortalClient` runs the three requests, subscribing to each `Response` signal before the call;
+  `PortalSessionManager` holds the policy: the daemon (`Silent`) never lets a dialog stay (15 s, then `Request.Close` and the
+  token is deleted), only `RequestConsent` (`Interactive`, `vigil permissions request`) waits for the user, and the token the
+  portal returns replaces the one that was used. The RemoteDesktop interface also offers `ConnectToEIS` (libei), which its
+  description recommends over the D-Bus `Notify*` methods; Vigil uses the D-Bus methods because they need no fd passing and no
+  extra library, and the interface keeps them for this use. Open question for a real desktop: the portal derives a host
+  application's identity from the process's systemd unit (`shared/xdp-app-info-host.c`) and scopes a restore token to it
+  (`xdp-session-persistence.c`, `get_persistent_permissions` looks the token up under `session->app_id`), so a consent given
+  from a terminal may not restore in `vigil.service`. The README documents the `systemd-run --user --scope` workaround; the
+  alternatives (ask the running daemon to do the request over IPC, or register an application id) were not built.
+- **uinput** (`Uinput/`): ioctl numbers are computed by `IoctlNumber` with the generic layout (x86 and arm64) and pinned to the
+  known values by `LinuxNativeLayoutTests`. The input core drops an `EV_REL` event with value 0 and a key release for a key that
+  is not down (`input_get_disposition` in `drivers/input/input.c`), so the nudge is +1/-1 and the F15 event is press and release.
+  The device is created at the first injection and kept; the first use waits one second, as `Documentation/input/uinput.rst`
+  does after `UI_DEV_CREATE`.
+- **Lock and battery**: `LogindSessionLock` reads `LockedHint` of `/org/freedesktop/login1/session/auto` (logind resolves `auto`
+  to the caller's session, or the user's display session, which a systemd user service needs); `PowerSupplyClassifier` is pure
+  and covered by `LinuxPowerSupplyTests`.
+- **Data directory**: `$XDG_DATA_HOME/vigil`, `~/.local/share/vigil` by default (`VigilPaths.LinuxDefaultDirectory`). The socket
+  path limit (sun_path 108, Vigil refuses more than 100) is unchanged. `InstallFiles.Purge` accepts the lower-case default name.
+- **Logging**: `JournalDetection` compares `JOURNAL_STREAM` with the socket inode of `/proc/self/fd/{2,1}`; under the journal
+  `DaemonHost` uses the console logger's systemd format and no `vigil.log`. `PresenceWorker` logs a failure that repeats at every
+  poll once (`RepeatedFailureTracker`).
+
+## Packaging and autostart (Linux)
+
+```
+scripts/package-linux.sh linux-x64      # or linux-arm64; output: artifacts/<rid>/{vigil,Vigil-<version>-<rid>.tar.gz}
+```
+
+The script publishes `src/Vigil` with Native AOT (needs `clang` and `zlib1g-dev`), prints the glibc version the binary asks for
+(`objdump -T`), and packs `vigil` and `LICENSE` under a folder named `Vigil` with owner 0 and sorted names. Native AOT cannot
+cross-compile between operating systems, and cross-architecture on Linux needs a cross linker and the target's C runtime and
+zlib objects, which the .NET documentation says are steps that "may suffice ... although this is not documented or guaranteed"
+(https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/cross-compile). GitHub has a native Arm runner for public
+repositories, `ubuntu-24.04-arm`
+(https://docs.github.com/en/actions/reference/runners/github-hosted-runners), so each architecture is built on its own runner and
+the script refuses to build for the other one. `-latest` labels are not used, as for the other jobs. The script has been
+syntax-checked and its guards run, but its build and packing steps have only been exercised in CI (never on the maintainer's
+machine).
+
+`vigil install` / `vigil uninstall` on Linux are implemented by `Install/SystemdUnitManager` on top of `SystemdUserUnit` (pure,
+write-only rendering) and `ISystemctl` (`Systemctl` runs `systemctl --user`; tests use a fake and never call it). The rules mirror
+`LaunchAgentManager`:
+
+- The unit is `~/.config/systemd/user/vigil.service` (`$XDG_CONFIG_HOME/systemd/user`). `Restart=on-abnormal` and `RestartSec=30`
+  are the macOS `KeepAlive { Crashed }` and `ThrottleInterval`: the table in systemd.service(5) restarts `on-failure` after any
+  non-zero exit, which includes the deliberate exits 1 and 2 (it would need `RestartPreventExitStatus=1 2`), and `on-abnormal`
+  only after a signal, a timeout or the watchdog. `WantedBy=`, `PartOf=` and `After=graphical-session.target` tie it to the
+  session (systemd.special(7)). Quoting follows systemd.syntax(7): `\`, `"` escaped, `%` written `%%`, and `$` written `$$` in the command
+  line (not in `Environment=`).
+- An existing unit is never parsed: it is compared byte for byte with what `Render` produces. Identical means idempotent;
+  anything else needs `--force`, which runs `disable --now` first. The unit is written atomically (`InstallFiles.WriteAtomically`,
+  shared with the macOS plist) with mode 0644.
+- Install checks that `systemctl --user show-environment` works (its output, the manager's environment, is never kept or shown) and
+  refuses with a message otherwise. It does not prepare `vigil.log`: the journal keeps the log.
+- `uninstall --purge` deletes only the default data directory, which is named `vigil` here (`InstallFiles.Purge` accepts `Vigil` and
+  `vigil`).
+
 ## Adding a platform
 
 1. Create `src/Vigil.Platform.<Name>` referencing Vigil.Core, marked AOT compatible and platform-attributed. Keep the
@@ -280,7 +387,8 @@ These mirror the "Privacy & trust" section of the README. A change that breaks o
 by the owner first.
 
 1. No network. Do not use or reference `System.Net.Http`, and add no sockets other than the local Unix domain
-   socket. No update checks, no telemetry. `Directory.Build.targets` removes the `System.Net.Http` implicit using;
+   socket (D-Bus on Linux is also a local Unix socket: `DBusAddresses` accepts `unix:` addresses only, because Tmds.DBus.Protocol
+   could also connect over TCP). No update checks, no telemetry. `Directory.Build.targets` removes the `System.Net.Http` implicit using;
    `grep -rn "System.Net" src/` must show only `System.Net.Sockets` for the IPC socket.
    Test projects too: xunit.v3 pulls in `Microsoft.Testing.Extensions.Telemetry`, which would send usage data
    from the Microsoft Testing Platform test host. Microsoft documents only environment variables as the opt-out
@@ -296,9 +404,15 @@ by the owner first.
 2. Read nothing but the OS idle counter. No event taps, no keystroke, mouse, window-title or screen reading. On
    macOS only post-event access may be requested, never Input Monitoring or any listen-event API. On Windows no
    `SetWindowsHookEx`, no raw input registration, no `GetAsyncKeyState`; the only reads are `GetLastInputInfo`,
-   `GetTickCount`, the session flags and the power status.
+   `GetTickCount`, the session flags and the power status. On Linux no `XQueryPointer`, no grabs, no `XSelectInput`, no XRecord or
+   XInput, no `/dev/input/event*`, no portal ScreenCast or clipboard; the only reads are the X server's idle counter, the GNOME
+   idle monitor, the logind locked hint, four sysfs power-supply attributes and the process's own `/proc/self/fd` links. The portal
+   session asks for keyboard and pointer only to post input.
 3. Least privilege. Never require root or administrator rights (on Windows everything is per user: HKEY_CURRENT_USER and
-   the user's profile).
+   the user's profile; on Linux the unit is a user unit, and Vigil never installs the udev rule or the group that the optional
+   `uinput` backend needs: the user does that, with their own `sudo`, and selects the backend in `config.json`). A prompt may only
+   be started by `vigil permissions request` (macOS Accessibility, Linux portal consent); `IPermissionProbe` never prompts, and
+   the daemon's portal start is bounded and closes the request instead of leaving a dialog (`PortalSessionManager`).
 4. Data stays local. The activity log stores counters and timestamps only, never content, only in the per-user
    data directory (0700; files 0600), and must stay switchable via `ActivityLog.Enabled`. The IPC socket is
    owner-only. Daily files are deleted after `ActivityLog.RetentionDays` (default 30, validated 1 to 3650) by
@@ -307,9 +421,12 @@ by the owner first.
    whose day is older than the cutoff; it never recurses, never follows or removes symbolic links, and never
    touches any other file.
 5. No silent persistence. Never write LaunchAgents, Run keys, login items, services or any autostart on the user's
-   behalf without an explicit user command. The only such command is `vigil install` (macOS, Windows), removed by
-   `vigil uninstall`; `AutostartCommand` is the only caller of `LaunchAgentManager` and `RunKeyManager`, and
+   behalf without an explicit user command. The only such command is `vigil install` (macOS, Windows, Linux), removed by
+   `vigil uninstall`; `AutostartCommand` is the only caller of `LaunchAgentManager`, `RunKeyManager` and `SystemdUnitManager`, and
    `RunKey` is the only code that touches the registry. No daemon, status, diag or update path may call them. Tests never
-   write the real Run key or call the real `launchctl`.
-6. Add no NuGet package without the owner's approval; versions are pinned centrally in `Directory.Packages.props`.
+   write the real Run key, never call the real `launchctl` or `systemctl`, and never touch `~/.config`.
+6. Add no NuGet package without the owner's approval; versions are pinned centrally in `Directory.Packages.props`. The one
+   approved for Linux is Tmds.DBus.Protocol 0.95.2 (MIT; the project documents it as NativeAOT and trimming compatible,
+   https://github.com/tmds/Tmds.DBus/blob/main/docs/protocol.md); only `Vigil.Platform.Linux` references it, and it adds nothing
+   to the macOS binary (the Linux branch is removed at compile time, the sizes were identical with and without it).
 7. No secrets in code, config or docs.
