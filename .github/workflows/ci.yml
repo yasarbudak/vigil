@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: the workflow only reads the repository. No job here needs more.
+permissions:
+  contents: read
+
+# A newer run on the same ref makes an older, still running one pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: 1
+
+jobs:
+  build-test:
+    name: Build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # Pinned image labels: -latest moves to a new OS version without a change in this repository.
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Build
+        run: dotnet build Vigil.slnx -c Release
+
+      # global.json selects Microsoft.Testing.Platform, which needs the explicit --solution form.
+      - name: Test
+        run: dotnet test --solution Vigil.slnx -c Release --no-build
+
+  package-macos:
+    name: Package macOS (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Native AOT cannot cross-compile, so each architecture is built on a runner of that architecture.
+          - rid: osx-x64
+            os: macos-15-intel
+          - rid: osx-arm64
+            os: macos-15
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Package
+        env:
+          RID: ${{ matrix.rid }}
+        run: scripts/package-macos.sh "$RID"
+
+      # ditto keeps the bundle structure, permissions and the ad-hoc signature intact.
+      - name: Zip the app
+        env:
+          RID: ${{ matrix.rid }}
+        run: |
+          set -euo pipefail
+          version="$(dotnet msbuild src/Vigil/Vigil.csproj -getProperty:Version -nologo | tr -d '[:space:]')"
+          ditto -c -k --keepParent "artifacts/$RID/Vigil.app" "Vigil-$version-$RID.zip"
+          ls -l "Vigil-$version-$RID.zip"
+
+      # archive: false uploads the zip as is, so the artifact is the zip itself and not a zip of a zip.
+      - name: Upload the app
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: Vigil-*-${{ matrix.rid }}.zip
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
