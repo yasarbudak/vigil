@@ -48,9 +48,13 @@ case "$APP" in
   *) echo "refusing to remove $APP" >&2; exit 1 ;;
 esac
 
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$PUBLISH_DIR/vigil" "$APP/Contents/MacOS/vigil"
 chmod 755 "$APP/Contents/MacOS/vigil"
+
+# The MIT license requires its notice in every distributed copy. Copied before codesign below, so the signature seals it.
+cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
+chmod 644 "$APP/Contents/Resources/LICENSE"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

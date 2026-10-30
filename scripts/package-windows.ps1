@@ -9,7 +9,7 @@
   in the per-user Run key; it is built from the same code (src/Vigild, OutputType WinExe). Output:
     artifacts/<rid>/vigil.exe
     artifacts/<rid>/vigild.exe
-    artifacts/<rid>/Vigil-<version>-<rid>.zip   (a folder named Vigil holding both programs)
+    artifacts/<rid>/Vigil-<version>-<rid>.zip   (a folder named Vigil holding both programs and the LICENSE file)
 
   Native AOT cannot compile across operating systems, so this runs on Windows. Cross-architecture works on Windows
   (https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/cross-compile): win-arm64 can be built on an
@@ -92,6 +92,10 @@ foreach ($program in $Programs) {
 
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+$License = Join-Path $Root 'LICENSE'
+if (-not (Test-Path -LiteralPath $License)) {
+  throw "the license file $License is missing (the MIT license requires its notice in every distributed copy)"
+}
 $Zip = Join-Path $Out "Vigil-$Version-$Rid.zip"
 $archive = [System.IO.Compression.ZipFile]::Open($Zip, [System.IO.Compression.ZipArchiveMode]::Create)
 try {
@@ -100,6 +104,9 @@ try {
     [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
       $archive, (Join-Path $Out $program.File), "Vigil/$($program.File)", [System.IO.Compression.CompressionLevel]::Optimal)
   }
+  # The MIT license requires its notice in every distributed copy: it goes next to vigil.exe.
+  [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+    $archive, $License, 'Vigil/LICENSE', [System.IO.Compression.CompressionLevel]::Optimal)
 }
 finally {
   $archive.Dispose()
