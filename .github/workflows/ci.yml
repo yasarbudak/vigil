@@ -94,6 +94,68 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  package-linux:
+    name: Package Linux (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Native AOT builds for the architecture it runs on here: cross-architecture on Linux needs a cross linker and the
+          # target's C runtime and zlib objects, which the .NET documentation calls "not documented or guaranteed"
+          # (https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/cross-compile). GitHub offers a native Arm
+          # runner, ubuntu-24.04-arm, free for public repositories
+          # (https://docs.github.com/en/actions/reference/runners/github-hosted-runners), so each architecture gets its own.
+          - rid: linux-x64
+            os: ubuntu-24.04
+          - rid: linux-arm64
+            os: ubuntu-24.04-arm
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      # The prerequisites of Native AOT on Ubuntu (https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/):
+      # clang is in the runner image, zlib1g-dev is not listed there, so both are requested; apt skips what is installed.
+      - name: Install the Native AOT prerequisites
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+
+      - name: Package
+        env:
+          RID: ${{ matrix.rid }}
+        run: scripts/package-linux.sh "$RID"
+
+      # Starts the real Native AOT binary once, on both architectures (each runner is of its own). diag only reads: it
+      # prints the platform, the configuration and the idle time, and posts nothing. A runner has no desktop, so with the
+      # session variables removed it must report the missing session cleanly (exit 0, "unavailable") and not crash.
+      # The data directory is pointed at the runner's temp folder.
+      - name: Smoke test (read only, no desktop session)
+        env:
+          RID: ${{ matrix.rid }}
+          VIGIL_DATA_DIR: ${{ runner.temp }}/vigil-smoke
+        run: |
+          set -euo pipefail
+          output="$(env -u DISPLAY -u WAYLAND_DISPLAY -u XDG_SESSION_TYPE "artifacts/$RID/vigil" diag)"
+          echo "$output"
+          echo "$output" | grep -q '^Idle time: .*unavailable'
+          echo "$output" | grep -q '^Session type: .*unknown'
+
+      # archive: false uploads the tarball as is, so the artifact is the tarball itself and not a zip of it.
+      - name: Upload the tarball
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: artifacts/${{ matrix.rid }}/Vigil-*-${{ matrix.rid }}.tar.gz
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
   package-windows:
     name: Package Windows (${{ matrix.rid }})
     runs-on: windows-2025
