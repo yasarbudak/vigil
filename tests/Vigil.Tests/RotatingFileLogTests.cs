@@ -28,8 +28,8 @@ public class RotatingFileLogTests
 
         writer.WriteLine(Line('e'));
 
-        Assert.Equal(Line('a') + "\n" + Line('b') + "\n" + Line('c') + "\n" + Line('d') + "\n", File.ReadAllText(writer.BackupPath));
-        Assert.Equal(Line('e') + "\n", File.ReadAllText(dir.Paths.LogPath));
+        Assert.Equal(Line('a') + "\n" + Line('b') + "\n" + Line('c') + "\n" + Line('d') + "\n", SharedFile.ReadAllText(writer.BackupPath));
+        Assert.Equal(Line('e') + "\n", SharedFile.ReadAllText(dir.Paths.LogPath));
     }
 
     [Fact]
@@ -49,7 +49,7 @@ public class RotatingFileLogTests
         Assert.True(new FileInfo(writer.BackupPath).Length <= Cap);
 
         // Backup then live file form the unbroken tail of what was written: the newest lines survive, the oldest are gone.
-        var kept = File.ReadAllLines(writer.BackupPath).Concat(File.ReadAllLines(dir.Paths.LogPath)).ToArray();
+        var kept = SharedFile.ReadAllLines(writer.BackupPath).Concat(SharedFile.ReadAllLines(dir.Paths.LogPath)).ToArray();
         Assert.True(kept.Length < 40);
         Assert.Equal(Enumerable.Range(40 - kept.Length, kept.Length).Select(Numbered), kept);
     }
@@ -64,8 +64,8 @@ public class RotatingFileLogTests
         using var writer = new RotatingFileWriter(dir.Paths.LogPath, Cap);
         writer.WriteLine("fresh");
 
-        Assert.Equal(new string('x', Cap + 1), File.ReadAllText(writer.BackupPath));
-        Assert.Equal("fresh\n", File.ReadAllText(dir.Paths.LogPath));
+        Assert.Equal(new string('x', Cap + 1), SharedFile.ReadAllText(writer.BackupPath));
+        Assert.Equal("fresh\n", SharedFile.ReadAllText(dir.Paths.LogPath));
     }
 
     [Fact]
@@ -77,7 +77,7 @@ public class RotatingFileLogTests
         using var writer = new RotatingFileWriter(dir.Paths.LogPath, Cap);
         writer.WriteLine("new");
 
-        Assert.Equal("old\nnew\n", File.ReadAllText(dir.Paths.LogPath));
+        Assert.Equal("old\nnew\n", SharedFile.ReadAllText(dir.Paths.LogPath));
         Assert.False(File.Exists(writer.BackupPath));
     }
 
@@ -131,7 +131,7 @@ public class RotatingFileLogTests
             },
             TestContext.Current.CancellationToken)));
 
-        var lines = File.ReadAllLines(dir.Paths.LogPath).Concat(File.ReadAllLines(writer.BackupPath)).ToArray();
+        var lines = SharedFile.ReadAllLines(dir.Paths.LogPath).Concat(SharedFile.ReadAllLines(writer.BackupPath)).ToArray();
         // 1600 lines of about 50 bytes exceed 64 KiB, so rotation ran during the writes as well.
         Assert.True(File.Exists(writer.BackupPath));
         Assert.All(lines, l => Assert.Matches(@"^t[0-7]-\d+-z{40}$", l));
@@ -150,7 +150,7 @@ public class RotatingFileLogTests
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         writer.WriteLine("kept");
 
-        Assert.Equal("kept\n", File.ReadAllText(path));
+        Assert.Equal("kept\n", SharedFile.ReadAllText(path));
     }
 
     [Fact]
@@ -182,7 +182,7 @@ public class RotatingFileLogTests
         Directory.Delete(writer.BackupPath);
         writer.WriteLine(Line('c'));
 
-        Assert.Equal(Line('c') + "\n", File.ReadAllText(dir.Paths.LogPath));
+        Assert.Equal(Line('c') + "\n", SharedFile.ReadAllText(dir.Paths.LogPath));
     }
 
     [Fact]
@@ -196,7 +196,7 @@ public class RotatingFileLogTests
         logger.LogWarning("two\nlines");
         logger.LogError(new InvalidOperationException("boom"), "failed");
 
-        var lines = File.ReadAllLines(dir.Paths.LogPath);
+        var lines = SharedFile.ReadAllLines(dir.Paths.LogPath);
         Assert.Equal(3, lines.Length);
         Assert.Matches(new Regex(@"^\d\d:\d\d:\d\d info: Vigil\.Daemon\.PresenceWorker\[0\] State: Injected$"), lines[0]);
         Assert.Matches(new Regex(@"^\d\d:\d\d:\d\d warn: Vigil\.Daemon\.PresenceWorker\[0\] two lines$"), lines[1]);
@@ -223,7 +223,7 @@ public class RotatingFileLogTests
 
         Assert.Equal(2, code);
         Assert.Contains("Threshold", error.ToString(), StringComparison.Ordinal);
-        var log = File.ReadAllText(dir.Paths.LogPath);
+        var log = SharedFile.ReadAllText(dir.Paths.LogPath);
         Assert.Contains("fail: Vigil.Daemon.DaemonHost[0] Exiting with code 2: Invalid configuration in", log, StringComparison.Ordinal);
         Assert.Contains("Threshold", log, StringComparison.Ordinal);
     }
@@ -236,6 +236,6 @@ public class RotatingFileLogTests
 
         host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Vigil.Test").LogInformation("hello log");
 
-        Assert.Contains("info: Vigil.Test[0] hello log", File.ReadAllText(dir.Paths.LogPath), StringComparison.Ordinal);
+        Assert.Contains("info: Vigil.Test[0] hello log", SharedFile.ReadAllText(dir.Paths.LogPath), StringComparison.Ordinal);
     }
 }

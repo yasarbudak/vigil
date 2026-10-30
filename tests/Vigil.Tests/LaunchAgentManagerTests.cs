@@ -82,7 +82,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
 
     private static UnixFileMode Mode(string path) => File.GetUnixFileMode(path);
 
-    [Fact]
+    [UnixOnlyFact]
     public void Install_outside_an_app_bundle_is_refused_and_changes_nothing()
     {
         var exe = Path.Combine(_root.FullName, "bin", "vigil");
@@ -97,14 +97,14 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.False(Directory.Exists(_dataDirectory));
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Install_without_a_current_executable_path_is_refused()
     {
         Assert.Equal(1, Manager().Install(null, force: false, _output, _error));
         Assert.Empty(_launchctl.Calls);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Install_from_a_bundle_without_Info_plist_is_refused()
     {
         var exe = MakeBundle(withInfoPlist: false);
@@ -114,7 +114,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.Empty(_launchctl.Calls);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Fresh_install_writes_the_plist_prepares_the_log_and_bootstraps_once()
     {
         var exe = MakeBundle();
@@ -133,7 +133,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.Empty(Directory.GetFiles(_agents, ".*"));
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Install_keeps_the_log_private_even_if_it_already_exists_with_looser_permissions()
     {
         var exe = MakeBundle();
@@ -148,7 +148,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.Equal("old", File.ReadAllText(log));
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Install_again_with_the_same_executable_is_a_no_op()
     {
         var exe = MakeBundle();
@@ -164,7 +164,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.Contains("Already installed", _output.ToString(), StringComparison.Ordinal);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Install_with_an_unchanged_plist_that_is_not_loaded_only_bootstraps()
     {
         var exe = MakeBundle();
@@ -178,7 +178,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.Equal([$"bootstrap {PlistPath}"], _launchctl.Changes);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Install_pointing_elsewhere_is_refused_without_force_and_leaves_the_plist_alone()
     {
         var first = MakeBundle("One.app");
@@ -197,7 +197,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.Empty(_launchctl.Changes);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Install_with_force_unloads_replaces_and_loads_again()
     {
         var first = MakeBundle("One.app");
@@ -212,7 +212,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.Contains($"<string>{second}</string>", File.ReadAllText(PlistPath), StringComparison.Ordinal);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void An_existing_plist_that_cannot_be_read_is_not_overwritten_without_force()
     {
         var exe = MakeBundle();
@@ -226,7 +226,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.Empty(_launchctl.Changes);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Install_with_a_different_data_directory_than_the_existing_plist_is_refused_without_force()
     {
         var exe = MakeBundle();
@@ -242,7 +242,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.Empty(_launchctl.Changes);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Install_with_force_over_a_different_data_directory_rewrites_the_plist_with_the_variable()
     {
         var exe = MakeBundle();
@@ -255,7 +255,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.Contains("VIGIL_DATA_DIR", File.ReadAllText(PlistPath), StringComparison.Ordinal);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void A_binary_plist_is_refused_without_force_and_replaced_with_it()
     {
         var exe = MakeBundle();
@@ -267,7 +267,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.Contains("<key>Label</key>", File.ReadAllText(PlistPath), StringComparison.Ordinal);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void A_bootstrap_failure_is_reported_with_the_exit_code_and_output()
     {
         var exe = MakeBundle();
@@ -280,7 +280,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.Contains("Input/output error", _error.ToString(), StringComparison.Ordinal);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void A_bootout_failure_during_a_forced_replace_stops_before_the_plist_changes()
     {
         var first = MakeBundle("One.app");
@@ -295,7 +295,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.Equal(original, File.ReadAllText(PlistPath));
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void A_data_directory_other_than_the_default_is_handed_to_the_daemon()
     {
         var exe = MakeBundle();
@@ -308,7 +308,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.Contains(custom, plist, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Atomic_write_replaces_the_content_and_leaves_no_temporary_file()
     {
         Directory.CreateDirectory(_agents);
@@ -321,7 +321,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.Equal([path], Directory.GetFileSystemEntries(_agents));
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Uninstall_unloads_deletes_the_plist_and_keeps_the_data_directory()
     {
         var exe = MakeBundle();
@@ -336,7 +336,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.True(Directory.Exists(_dataDirectory));
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Uninstall_when_nothing_is_installed_succeeds_and_changes_nothing()
     {
         var code = Manager().Uninstall(purge: false, _output, _error);
@@ -346,7 +346,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.Contains("Not installed", _output.ToString(), StringComparison.Ordinal);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Uninstall_twice_is_idempotent()
     {
         var exe = MakeBundle();
@@ -359,7 +359,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.Equal(1, _launchctl.Calls.Count(c => c.StartsWith("bootout", StringComparison.Ordinal)));
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Uninstall_keeps_the_plist_when_the_job_cannot_be_unloaded()
     {
         var exe = MakeBundle();
@@ -372,7 +372,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.True(File.Exists(PlistPath));
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Uninstall_removes_a_plist_that_is_no_longer_loaded()
     {
         Directory.CreateDirectory(_agents);
@@ -385,7 +385,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.Empty(_launchctl.Changes);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Purge_deletes_only_the_default_data_directory_and_not_the_agents_directory()
     {
         var exe = MakeBundle();
@@ -400,14 +400,14 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.True(Directory.Exists(Path.GetDirectoryName(exe)));
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Purge_with_nothing_to_purge_succeeds()
     {
         Assert.Equal(0, Manager().Uninstall(purge: true, _output, _error));
         Assert.Contains("Nothing to purge", _output.ToString(), StringComparison.Ordinal);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Purge_refuses_a_data_directory_that_is_not_the_default()
     {
         var custom = Path.Combine(_root.FullName, "Documents");
@@ -421,7 +421,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.Contains("not the default", _error.ToString(), StringComparison.Ordinal);
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Purge_refuses_a_default_directory_that_is_not_named_Vigil()
     {
         var odd = Path.Combine(_root.FullName, "Home");
@@ -433,7 +433,7 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.True(Directory.Exists(odd));
     }
 
-    [Fact]
+    [UnixOnlyFact]
     public void Purge_refuses_a_symbolic_link()
     {
         var target = Path.Combine(_root.FullName, "real");

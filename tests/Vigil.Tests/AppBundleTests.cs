@@ -4,7 +4,7 @@ namespace Vigil.Tests;
 
 public class AppBundleTests
 {
-    [Theory]
+    [UnixOnlyTheory]
     [InlineData("/Applications/Vigil.app/Contents/MacOS/vigil", "/Applications/Vigil.app")]
     [InlineData("/Users/me/Applications/Vigil.app/Contents/MacOS/vigil", "/Users/me/Applications/Vigil.app")]
     [InlineData("/Users/me/My Apps/Vigil.app/Contents/MacOS/vigil", "/Users/me/My Apps/Vigil.app")]
@@ -15,7 +15,7 @@ public class AppBundleTests
         Assert.Equal(bundle, found);
     }
 
-    [Theory]
+    [UnixOnlyTheory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("vigil")]
