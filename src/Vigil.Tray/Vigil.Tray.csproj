@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- WinExe: the Windows GUI subsystem, so starting the tray never opens a console window. On macOS and Linux the
+         output type changes nothing. -->
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>vigil-tray</AssemblyName>
+    <RootNamespace>Vigil.Tray.Ui</RootNamespace>
+    <PublishAot>true</PublishAot>
+    <IsAotCompatible>true</IsAotCompatible>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Desktop" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Vigil.App/Vigil.App.csproj" />
+  </ItemGroup>
+</Project>

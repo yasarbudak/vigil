@@ -7,6 +7,7 @@
     <Project Path="src/Vigil.App/Vigil.App.csproj" />
     <Project Path="src/Vigil/Vigil.csproj" />
     <Project Path="src/Vigild/Vigild.csproj" />
+    <Project Path="src/Vigil.Tray/Vigil.Tray.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Vigil.Core.Tests/Vigil.Core.Tests.csproj" />

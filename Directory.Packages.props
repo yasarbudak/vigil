@@ -3,6 +3,10 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Used only by Vigil.Tray (the tray icon and settings window). Avalonia.Desktop brings the macOS, Windows and X11 backends and Skia. -->
+    <PackageVersion Include="Avalonia" Version="12.1.4" />
+    <PackageVersion Include="Avalonia.Desktop" Version="12.1.4" />
+    <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.1.4" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.14" />
     <PackageVersion Include="System.CommandLine" Version="2.0.14" />
     <!-- 0.x: the project has no 1.0 release yet. Used only by Vigil.Platform.Linux (D-Bus: portal, GNOME idle monitor, logind). -->

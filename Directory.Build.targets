@@ -14,6 +14,21 @@
     <TestingPlatformBuilderHook Remove="98058041-B5B6-4A75-9834-58E6DF796A22" />
   </ItemGroup>
 
+  <PropertyGroup>
+    <!-- Projects that reference Avalonia (Vigil.Tray, and what builds it): the Avalonia package adds "AvaloniaUI" to this
+         property (Avalonia.props), and the AvaloniaStats target of Avalonia.BuildServices, which runs before CoreCompile,
+         sends anonymous build statistics only while the property is not empty (Condition of that target, in
+         Avalonia.BuildServices 11.3.2, build/Avalonia.BuildServices.targets). The package documents only an environment
+         variable as the opt-out (AVALONIA_TELEMETRY_OPTOUT=1), which depends on each developer's and CI's environment, so the
+         property is cleared here instead, after the package set it, and the target is skipped whatever the environment is.
+         The guard target below fails the build if it ever is not empty. See docs/DEVELOPER.md, rule 1. -->
+    <UsedAvaloniaProducts></UsedAvaloniaProducts>
+  </PropertyGroup>
+
+  <Target Name="_VigilForbidAvaloniaTelemetry" BeforeTargets="BeforeCompile" Condition="'$(UsedAvaloniaProducts)' != ''">
+    <Error Text="UsedAvaloniaProducts is '$(UsedAvaloniaProducts)': the Avalonia.BuildServices statistics task would run at build time. Vigil guarantees no telemetry: see docs/DEVELOPER.md, rule 1." />
+  </Target>
+
   <Target Name="_VigilForbidTelemetryHook" BeforeTargets="BeforeCompile" Condition="'$(IsTestingPlatformApplication)' == 'true'">
     <ItemGroup>
       <_VigilTelemetryHook Include="@(TestingPlatformBuilderHook)"
