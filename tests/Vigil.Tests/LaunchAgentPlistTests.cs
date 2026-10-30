@@ -5,10 +5,9 @@ namespace Vigil.Tests;
 public class LaunchAgentPlistTests
 {
     private const string Exe = "/Applications/Vigil.app/Contents/MacOS/vigil";
-    private const string Log = "/Users/me/Library/Application Support/Vigil/vigil.log";
 
-    private static LaunchAgentSpec Spec(string exe = Exe, string log = Log, string? dataDirectory = null) =>
-        new("io.github.yasarbudak.vigil", exe, log, "io.github.yasarbudak.vigil", dataDirectory);
+    private static LaunchAgentSpec Spec(string exe = Exe, string? dataDirectory = null) =>
+        new("io.github.yasarbudak.vigil", exe, "io.github.yasarbudak.vigil", dataDirectory);
 
     private static string Lines(params string[] lines) => string.Join('\n', lines) + "\n";
 
@@ -40,10 +39,6 @@ public class LaunchAgentPlistTests
             "\t</dict>",
             "\t<key>ThrottleInterval</key>",
             "\t<integer>30</integer>",
-            "\t<key>StandardOutPath</key>",
-            "\t<string>/Users/me/Library/Application Support/Vigil/vigil.log</string>",
-            "\t<key>StandardErrorPath</key>",
-            "\t<string>/Users/me/Library/Application Support/Vigil/vigil.log</string>",
             "</dict>",
             "</plist>");
 
@@ -68,6 +63,16 @@ public class LaunchAgentPlistTests
     }
 
     [Fact]
+    public void Stdout_and_stderr_are_not_redirected_because_the_daemon_owns_and_rotates_its_log()
+    {
+        var plist = LaunchAgentPlist.Render(Spec(dataDirectory: "/private/tmp/vg"));
+
+        Assert.DoesNotContain("StandardOutPath", plist, StringComparison.Ordinal);
+        Assert.DoesNotContain("StandardErrorPath", plist, StringComparison.Ordinal);
+        Assert.DoesNotContain("vigil.log", plist, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Restart_policy_is_crash_only_so_deliberate_error_exits_do_not_loop()
     {
         var plist = LaunchAgentPlist.Render(Spec());
@@ -84,7 +89,7 @@ public class LaunchAgentPlistTests
     [InlineData("/Users/ünï/Vigil.app/Contents/MacOS/vigil")]
     public void Paths_with_spaces_quotes_and_non_ascii_are_written_verbatim(string exe)
     {
-        var plist = LaunchAgentPlist.Render(Spec(exe, log: exe + ".log"));
+        var plist = LaunchAgentPlist.Render(Spec(exe));
 
         Assert.Contains($"\t\t<string>{exe}</string>\n\t\t<string>run</string>", plist, StringComparison.Ordinal);
     }

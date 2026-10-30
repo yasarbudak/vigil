@@ -125,7 +125,8 @@ public sealed class LaunchAgentManagerTests : IDisposable
         Assert.Equal([$"bootstrap {PlistPath}"], _launchctl.Changes);
         var plist = File.ReadAllText(PlistPath);
         Assert.Contains($"<string>{exe}</string>\n\t\t<string>run</string>", plist, StringComparison.Ordinal);
-        Assert.Contains(Path.Combine(_dataDirectory, "vigil.log"), plist, StringComparison.Ordinal);
+        Assert.DoesNotContain("StandardOutPath", plist, StringComparison.Ordinal);
+        Assert.Contains($"Log: {Path.Combine(_dataDirectory, "vigil.log")}", _output.ToString(), StringComparison.Ordinal);
         Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead, Mode(PlistPath));
         Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, Mode(Path.Combine(_dataDirectory, "vigil.log")));
         Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, Mode(_dataDirectory));
