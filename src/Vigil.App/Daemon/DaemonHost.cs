@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Vigil.Activity;
 using Vigil.Configuration;
 using Vigil.Core.Abstractions;
+using Vigil.Core.Options;
 using Vigil.Core.Presence;
 using Vigil.Ipc;
 using Vigil.Logging;
@@ -72,10 +73,21 @@ internal static class DaemonHost
         services.AddSingleton(settings.Platform with { DataDirectory = paths.DataDirectory });
         services.AddSingleton(provider => (platformFactory ?? PlatformServices.Create)(provider.GetRequiredService<PlatformOptions>()));
 
-        services.AddSingleton<IActivityLog>(provider =>
-            settings.Vigil.ActivityLog.Enabled
-                ? new JsonlActivityLog(paths, settings.Vigil.ActivityLog, provider.GetRequiredService<ILogger<JsonlActivityLog>>())
+        // The activity log can change while the daemon runs (ReloadConfig), so everything holds this forwarding wrapper.
+        services.AddSingleton<Func<ActivityLogOptions, IActivityLog>>(provider =>
+            options => options.Enabled
+                ? new JsonlActivityLog(paths, options, provider.GetRequiredService<ILogger<JsonlActivityLog>>())
                 : new NullActivityLog());
+        services.AddSingleton(provider => new ReloadableActivityLog(
+            provider.GetRequiredService<Func<ActivityLogOptions, IActivityLog>>()(settings.Vigil.ActivityLog)));
+        services.AddSingleton<IActivityLog>(provider => provider.GetRequiredService<ReloadableActivityLog>());
+        services.AddSingleton<IConfigReloader>(provider => new ConfigReloader(
+            paths,
+            provider.GetRequiredService<PresenceEngine>(),
+            provider.GetRequiredService<ReloadableActivityLog>(),
+            provider.GetRequiredService<Func<ActivityLogOptions, IActivityLog>>(),
+            settings,
+            provider.GetRequiredService<ILogger<ConfigReloader>>()));
 
         services.AddSingleton<ActivityLogRetention>();
         services.AddSingleton<PresenceEngine>();
@@ -88,8 +100,7 @@ internal static class DaemonHost
                 platform.Injector,
                 platform.Session,
                 platform.Permissions,
-                provider.GetRequiredService<TimeProvider>(),
-                settings.Vigil);
+                provider.GetRequiredService<TimeProvider>());
         });
 
         services.AddSingleton<IIpcHandler, IpcHandler>();

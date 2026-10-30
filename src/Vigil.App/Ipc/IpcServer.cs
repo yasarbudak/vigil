@@ -28,8 +28,9 @@ internal sealed class IpcServer : IHostedService, IDisposable
 
     // sun_path is 104 bytes on macOS and 108 on Linux and Windows (afunix.h: UNIX_PATH_MAX 108, quoted in
     // dotnet/runtime UnixDomainSocketEndPoint.Windows.cs), so the same limit is safe on all three.
-    private const int MaxSocketPathBytes = 100;
-        private static readonly TimeSpan AcceptRetryDelay = TimeSpan.FromMilliseconds(250);
+    internal const int MaxSocketPathBytes = 100;
+
+    private static readonly TimeSpan AcceptRetryDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(5);
 
     private readonly string _socketPath;

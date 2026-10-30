@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Extensions.Configuration;
 using Vigil.Core.Options;
 using Vigil.Platform;
@@ -33,13 +34,24 @@ internal static class VigilConfiguration
     private const string LinuxSection = "Linux";
 
     /// <summary>Reads and binds the file without validating values. Throws <see cref="ConfigurationException"/> if it cannot.</summary>
-    public static VigilSettings Load(string configPath)
+    public static VigilSettings Load(string configPath) =>
+        Bind(configPath, builder => builder.AddJsonFile(configPath, optional: true, reloadOnChange: false));
+
+    /// <summary>
+    /// Binds configuration text exactly as <see cref="Load"/> binds the file, without validating values. The tray uses it to
+    /// check what it is about to write with the daemon's own loader, so a saved file is one the daemon accepts.
+    /// </summary>
+    /// <param name="origin">Names the source in error messages (the path the text is meant for).</param>
+    public static VigilSettings LoadFromJson(string json, string origin) =>
+        Bind(origin, builder => builder.AddJsonStream(new MemoryStream(Encoding.UTF8.GetBytes(json))));
+
+    private static VigilSettings Bind(string origin, Action<ConfigurationBuilder> addSource)
     {
         try
         {
-            var configuration = new ConfigurationBuilder()
-                .AddJsonFile(configPath, optional: true, reloadOnChange: false)
-                .Build();
+            var builder = new ConfigurationBuilder();
+            addSource(builder);
+            var configuration = builder.Build();
 
             return new VigilSettings(
                 configuration.GetSection(VigilSection).Get<VigilOptions>() ?? new VigilOptions(),
@@ -57,18 +69,25 @@ internal static class VigilConfiguration
                 root = inner;
             }
 
-            throw new ConfigurationException($"Cannot use {configPath}: {root.Message}", ex);
+            // The binder names the key in its own message ("Failed to convert configuration value at 'Vigil:Threshold' to type ...")
+            // and the conversion error names the text; both are needed to find the mistake.
+            var detail = ex is InvalidOperationException && !ReferenceEquals(ex, root) ? $"{ex.Message} {root.Message}" : root.Message;
+            throw new ConfigurationException($"Cannot use {origin}: {detail}", ex);
         }
     }
 
     /// <summary>Like <see cref="Load"/>, and also throws when a value is invalid.</summary>
-    public static VigilSettings LoadValidated(string configPath)
+    public static VigilSettings LoadValidated(string configPath) => Validated(Load(configPath), configPath);
+
+    /// <summary>Like <see cref="LoadFromJson"/>, and also throws when a value is invalid.</summary>
+    public static VigilSettings LoadFromJsonValidated(string json, string origin) => Validated(LoadFromJson(json, origin), origin);
+
+    private static VigilSettings Validated(VigilSettings settings, string origin)
     {
-        var settings = Load(configPath);
         var errors = settings.Validate();
         if (errors.Count > 0)
         {
-            throw new ConfigurationException($"Invalid configuration in {configPath}: " + string.Join(" ", errors));
+            throw new ConfigurationException($"Invalid configuration in {origin}: " + string.Join(" ", errors));
         }
 
         return settings;

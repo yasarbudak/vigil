@@ -1,7 +1,6 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Vigil.Activity;
-using Vigil.Core.Options;
 using Vigil.Core.Presence;
 using Vigil.Platform;
 
@@ -12,7 +11,6 @@ internal sealed class PresenceWorker(
     PresenceCycle cycle,
     PresenceEngine engine,
     ActivityLogRetention retention,
-    VigilOptions options,
     PlatformServices platform,
     TimeProvider time,
     ILogger<PresenceWorker> logger) : BackgroundService
@@ -42,6 +40,7 @@ internal sealed class PresenceWorker(
             logger.LogInformation("Platform: {Summary}.", summary);
         }
 
+        var options = engine.Options;
         logger.LogInformation(
             "Watching idle time every {Poll}s, acting at {Threshold}s idle.",
             options.PollInterval.TotalSeconds,
@@ -61,13 +60,19 @@ internal sealed class PresenceWorker(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        using var timer = new PeriodicTimer(options.PollInterval, time);
+        using var timer = new PeriodicTimer(engine.Options.PollInterval, time);
         var reported = (State: (PresenceState?)null, Reason: (DegradedReason?)null);
 
         try
         {
             do
             {
+                // A reload (IpcCommand.ReloadConfig) may have changed the interval; it applies from this poll on.
+                if (timer.Period != engine.Options.PollInterval)
+                {
+                    timer.Period = engine.Options.PollInterval;
+                }
+
                 RunRetention();
                 await RunCycleAsync(stoppingToken).ConfigureAwait(false);
                 reported = ReportChange(reported);
@@ -120,7 +125,7 @@ internal sealed class PresenceWorker(
     /// </summary>
     private void ReportLockDetection()
     {
-        if (!options.PauseOnLock || engine.GetStatus().LockStateKnown is not { } known)
+        if (!engine.Options.PauseOnLock || engine.GetStatus().LockStateKnown is not { } known)
         {
             return;
         }

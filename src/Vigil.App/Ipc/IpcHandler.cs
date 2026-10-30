@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Vigil.Configuration;
 using Vigil.Core.Abstractions;
 using Vigil.Core.Presence;
 using Vigil.Platform;
@@ -9,7 +10,8 @@ namespace Vigil.Ipc;
 
 /// <summary>Maps IPC commands onto the presence engine and the daemon's lifetime.</summary>
 /// <param name="consentLimit">How long a permission request may wait for the user before the daemon answers "timed out"; tests pass a short one.</param>
-internal sealed class IpcHandler(PresenceEngine engine, IHostApplicationLifetime lifetime, PlatformServices? platform = null, TimeSpan? consentLimit = null, ILogger<IpcHandler>? logger = null) : IIpcHandler
+/// <param name="reloader">Applies config.json for <see cref="IpcCommand.ReloadConfig"/>; without one the command is refused.</param>
+internal sealed class IpcHandler(PresenceEngine engine, IHostApplicationLifetime lifetime, PlatformServices? platform = null, TimeSpan? consentLimit = null, ILogger<IpcHandler>? logger = null, IConfigReloader? reloader = null) : IIpcHandler
 {
     public IpcResponse Handle(IpcRequest request)
     {
@@ -34,6 +36,8 @@ internal sealed class IpcHandler(PresenceEngine engine, IHostApplicationLifetime
                     break; // Acknowledged here; the stop itself happens in ResponseSent, after the client has the answer.
                 case IpcCommand.RequestPermission:
                     return Fail("The permission request waits for a person and is served by HandleAsync.");
+                case IpcCommand.ReloadConfig:
+                    return Reload();
                 default:
                     return Fail($"Unknown command '{request.Command}'.");
             }
@@ -104,6 +108,20 @@ internal sealed class IpcHandler(PresenceEngine engine, IHostApplicationLifetime
         {
             lifetime.StopApplication();
         }
+    }
+
+    /// <summary>A configuration that is not valid changes nothing; the error is the loader's own message, naming the file and each violated rule.</summary>
+    private IpcResponse Reload()
+    {
+        if (reloader is null)
+        {
+            return Fail("This daemon cannot reload its configuration.");
+        }
+
+        var result = reloader.Reload();
+        return result.Ok
+            ? new IpcResponse(true, Status: engine.GetStatus(), Platform: platform?.Summary, RestartRequired: result.RestartRequired.Count > 0 ? result.RestartRequired : null)
+            : Fail(result.Error!);
     }
 
     private static IpcResponse Fail(string error) => new(false, error);

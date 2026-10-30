@@ -18,6 +18,12 @@ internal enum IpcCommand
     /// take minutes (see <see cref="IpcTimeouts"/>). Sent by <c>vigil permissions request</c>; the only command that can cause a prompt.
     /// </summary>
     RequestPermission,
+
+    /// <summary>
+    /// Asks the daemon to read config.json again and apply it. The daemon validates the file first: when it is not valid nothing
+    /// changes and the answer carries the error. Sent by the tray after it saved the settings.
+    /// </summary>
+    ReloadConfig,
 }
 
 /// <summary>How long each side of the socket waits. Every command is quick except <see cref="IpcCommand.RequestPermission"/>, which waits for a person.</summary>
@@ -49,13 +55,18 @@ internal sealed record IpcRequest(IpcCommand Command, TimeSpan? Duration = null)
 /// <param name="Platform">How the platform works in this daemon (the Linux session type and backends); null when there is nothing to add.</param>
 /// <param name="Message">The text for the user when <see cref="Ok"/> is true and there is no status to show (a granted permission request).</param>
 /// <param name="Consent">How a <see cref="IpcCommand.RequestPermission"/> ended; null for every other command and when the daemon refused the command.</param>
+/// <param name="RestartRequired">
+/// For <see cref="IpcCommand.ReloadConfig"/>: the keys of the new configuration that the running daemon cannot take over and that
+/// apply only after it is restarted (for example <c>Linux.Backend</c>); null or empty when everything was applied.
+/// </param>
 internal sealed record IpcResponse(
     bool Ok,
     string? Error = null,
     PresenceStatus? Status = null,
     string? Platform = null,
     string? Message = null,
-    ConsentOutcome? Consent = null);
+    ConsentOutcome? Consent = null,
+    IReadOnlyList<string>? RestartRequired = null);
 
 internal interface IIpcHandler
 {

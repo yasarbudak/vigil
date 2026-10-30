@@ -16,5 +16,6 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Vigil.Tests" />
+    <InternalsVisibleTo Include="vigil-tray" />
   </ItemGroup>
 </Project>

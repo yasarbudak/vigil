@@ -20,6 +20,9 @@ internal sealed class VigilPaths(string dataDirectory)
 
     public string ConfigPath => Path.Combine(DataDirectory, "config.json");
 
+    /// <summary>Lock file that keeps a second tray icon from starting (<c>Tray/TrayInstanceLock</c>).</summary>
+    public string TrayLockPath => Path.Combine(DataDirectory, "vigil-tray.lock");
+
     /// <summary>
     /// The saved consent of the Linux desktop portal (Wayland): its restore token, one line, 0600. Written only by
     /// <c>vigil permissions request</c> and by a daemon that started a session with it; see <c>PortalTokenStore</c>.

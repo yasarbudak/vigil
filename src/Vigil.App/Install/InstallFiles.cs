@@ -7,7 +7,8 @@ namespace Vigil.Install;
 /// </summary>
 internal static class InstallFiles
 {
-    private const UnixFileMode LogMode = UnixFileMode.UserRead | UnixFileMode.UserWrite; // 0600
+    /// <summary>0600: the mode of every private file Vigil writes (the log, config.json saved by the tray).</summary>
+    internal const UnixFileMode PrivateFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
 
     private const UnixFileMode DefinitionMode =
         UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead; // 0644
@@ -53,24 +54,25 @@ internal static class InstallFiles
             return;
         }
 
-        using (new FileStream(paths.LogPath, CreateOptions(FileMode.OpenOrCreate, LogMode)))
+        using (new FileStream(paths.LogPath, CreateOptions(FileMode.OpenOrCreate, PrivateFileMode)))
         {
         }
 
-        SetMode(paths.LogPath, LogMode);
+        SetMode(paths.LogPath, PrivateFileMode);
     }
 
     /// <summary>
-    /// Writes a temporary file next to the target, sets 0644 and renames it over the target (rename(2) is atomic), for the
-    /// files the service managers read: the LaunchAgent plist and the systemd unit. A reader sees the old or the new content,
-    /// never half of it.
+    /// Writes a temporary file next to the target, sets <paramref name="mode"/> (0644 by default, for the files the service
+    /// managers read: the LaunchAgent plist and the systemd unit; <see cref="PrivateFileMode"/> for a private file) and renames
+    /// it over the target (rename(2) is atomic). A reader sees the old or the new content, never half of it. The mode is applied
+    /// to the temporary file before the rename, so the target never exists with a looser one.
     /// </summary>
-    internal static void WriteAtomically(string path, string content)
+    internal static void WriteAtomically(string path, string content, UnixFileMode mode = DefinitionMode)
     {
         var temporary = Path.Combine(Path.GetDirectoryName(path)!, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
         try
         {
-            using (var stream = new FileStream(temporary, CreateOptions(FileMode.CreateNew, DefinitionMode)))
+            using (var stream = new FileStream(temporary, CreateOptions(FileMode.CreateNew, mode)))
             {
                 using var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(false));
                 writer.Write(content);
@@ -78,7 +80,7 @@ internal static class InstallFiles
                 stream.Flush(flushToDisk: true);
             }
 
-            SetMode(temporary, DefinitionMode); // Independent of the umask.
+            SetMode(temporary, mode); // Independent of the umask.
             File.Move(temporary, path, overwrite: true);
         }
         finally

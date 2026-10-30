@@ -10,14 +10,17 @@ internal static class StatusFormatter
         output.WriteLine($"State:           {Describe(status)}");
         output.WriteLine($"Last activity:   {FormatPoint(status.LastRealActivity, status.At)}");
         output.WriteLine($"Last injection:  {FormatPoint(status.LastInjection, status.At)}");
-        output.WriteLine(
-            $"Today:           {status.InjectionsToday} injections, {FormatDuration(status.CoveredToday)} covered");
+        output.WriteLine($"Today:           {DescribeToday(status)}");
         output.WriteLine($"Screen lock:     {DescribeLockDetection(status)}");
         if (platform is not null)
         {
             output.WriteLine($"Platform:        {platform}");
         }
     }
+
+    /// <summary>The counters of the day, as the <c>Today</c> line of <c>vigil status</c> shows them (also used by the tray).</summary>
+    public static string DescribeToday(PresenceStatus status) =>
+        $"{status.InjectionsToday} injections, {FormatDuration(status.CoveredToday)} covered";
 
     private static string DescribeLockDetection(PresenceStatus status) => (status.PauseOnLock, status.LockStateKnown) switch
     {
@@ -27,7 +30,8 @@ internal static class StatusFormatter
         (true, null) => "not checked yet",
     };
 
-    private static string Describe(PresenceStatus status) => status.State switch
+    /// <summary>The state with its reason, as the <c>State</c> line of <c>vigil status</c> shows it (also used by the tray).</summary>
+    public static string Describe(PresenceStatus status) => status.State switch
     {
         PresenceState.Paused when status.PausedUntil is { } until =>
             $"Paused (until {until.ToLocalTime():HH:mm:ss})",
