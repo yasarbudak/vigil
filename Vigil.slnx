@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Vigil.Core/Vigil.Core.csproj" />
+    <Project Path="src/Vigil.Platform.Linux/Vigil.Platform.Linux.csproj" />
     <Project Path="src/Vigil.Platform.MacOS/Vigil.Platform.MacOS.csproj" />
     <Project Path="src/Vigil.Platform.Windows/Vigil.Platform.Windows.csproj" />
     <Project Path="src/Vigil.App/Vigil.App.csproj" />
