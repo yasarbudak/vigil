@@ -93,3 +93,58 @@ jobs:
           archive: false
           if-no-files-found: error
           retention-days: 14
+
+  package-windows:
+    name: Package Windows (${{ matrix.rid }})
+    runs-on: windows-2025
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Native AOT cannot cross-compile between operating systems, but on Windows it can between x64 and arm64 as
+        # long as the C++ build tools of the target architecture are installed
+        # (https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/cross-compile). The windows-2025 image
+        # lists Microsoft.VisualStudio.Component.VC.Tools.ARM64 and .x86.x64
+        # (https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md), so one runner
+        # type builds both. An arm64 build cannot run on this x64 runner, so only win-x64 gets the smoke test below.
+        rid: [win-x64, win-arm64]
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Package
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+        run: scripts/package-windows.ps1 $env:RID
+
+      # Starts the real Native AOT binaries once. Both commands only read: diag prints the platform, idle time and
+      # configuration, permissions request says nothing is needed on Windows. Nothing is posted, installed or written
+      # to the registry, and the data directory is pointed at the runner's temp folder.
+      - name: Smoke test the x64 build (read only)
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        env:
+          VIGIL_DATA_DIR: ${{ runner.temp }}\vigil-smoke
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & artifacts/win-x64/vigil.exe diag
+          if ($LASTEXITCODE -ne 0) { throw "vigil diag exited with $LASTEXITCODE" }
+          & artifacts/win-x64/vigil.exe permissions request
+          if ($LASTEXITCODE -ne 0) { throw "vigil permissions request exited with $LASTEXITCODE" }
+
+      # archive: false uploads the zip as is, so the artifact is the zip itself and not a zip of a zip.
+      - name: Upload the zip
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: artifacts/${{ matrix.rid }}/Vigil-*-${{ matrix.rid }}.zip
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
