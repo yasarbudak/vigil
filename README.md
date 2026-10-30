@@ -188,7 +188,8 @@ The macOS script publishes a Native AOT binary, assembles an app bundle, and sig
 `artifacts/<rid>/Vigil.app` (for example `artifacts/osx-x64/Vigil.app`). The Windows script publishes two Native AOT
 programs, `vigil.exe` (the console program, every command) and `vigild.exe` (the same daemon without a console window,
 which autostart runs), and zips them: `artifacts/<rid>/vigil.exe`, `artifacts/<rid>/vigild.exe` and
-`artifacts/<rid>/Vigil-<version>-<rid>.zip`. They are not signed.
+`artifacts/<rid>/Vigil-<version>-<rid>.zip` (the zip also holds the `LICENSE` file, as `Vigil.app/Contents/Resources/LICENSE`
+does on macOS). They are not signed.
 
 ## Install on macOS
 
@@ -280,9 +281,12 @@ post its event.
 
    It writes one value, `Vigil`, under `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`, whose
    data is the quoted path of `vigild.exe`, and creates the data directory and `vigil.log`. Windows then starts
-   `vigild.exe` at your next sign-in (Windows may delay Run programs a little, and ignores them in Safe Mode). Install
-   does not start the daemon; start it right away by running `vigild.exe`, or `vigil run` in a terminal. `vigild.exe`
-   has no window: its output goes to `vigil.log`.
+   `vigild.exe` at your next sign-in (Windows may delay Run programs a little, and ignores them in Safe Mode). Like
+   the macOS install, it also starts `vigild.exe` right away, without a window and with the same arguments as the
+   value, unless a daemon already serves that data directory. Running it again with the same settings starts the
+   daemon only if it is not running. With `--force`, a running daemon is stopped first and restarted with the new
+   value; if it cannot be stopped, the old value stays. If the start fails, the value stays written, the command exits with 1 and says so.
+   `vigild.exe` has no window: its output goes to `vigil.log`.
 
    `vigil install` refuses when `vigild.exe` is not next to `vigil.exe`, and when a different `Vigil` value already
    exists (another folder, another data directory) unless you pass `--force`. Running it again with the same folder and

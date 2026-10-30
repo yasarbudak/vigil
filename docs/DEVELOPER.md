@@ -191,7 +191,8 @@ scripts/package-windows.ps1 win-x64      # or win-arm64; output: artifacts/<rid>
 ```
 
 The script publishes `src/Vigil` and `src/Vigild` with Native AOT, checks that `vigil.exe` has the console subsystem and
-`vigild.exe` the Windows (no console) subsystem by reading the PE header, and zips both under a folder named `Vigil`.
+`vigild.exe` the Windows (no console) subsystem by reading the PE header, and zips both, plus the repo's `LICENSE`
+(the MIT license requires its notice in distributed copies), under a folder named `Vigil`.
 Nothing is signed. Native AOT can cross-compile between x64 and arm64 on Windows when the target's C++ build tools are
 installed (https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/cross-compile); the `windows-2025` image
 lists `Microsoft.VisualStudio.Component.VC.Tools.ARM64` and `.x86.x64`, so CI builds both `win-x64` and `win-arm64` there.
@@ -209,8 +210,17 @@ answering; tests use a fake or a real server with a fake handler). The rules mir
   directory other than the default (`DaemonArguments` builds and parses it). A Run key command line may be 260
   characters at most (https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys); longer is refused.
 - An existing value is compared as text with what would be written. Identical: nothing changes. Different or not plain
-  text: refused without `--force`. Install does not start the daemon (the macOS flow does, as a side effect of
-  `launchctl bootstrap`).
+  text: refused without `--force`. Install also starts the daemon, as the macOS flow does with `launchctl bootstrap`:
+  `IDaemonProbe` (`IpcDaemonStopper.IsRunning`, the same socket probe `Stop` waits on) says whether a daemon already
+  serves the data directory, and `IDaemonLauncher` (`ProcessDaemonLauncher`: `Process.Start`, `UseShellExecute = false`,
+  `CreateNoWindow = true`, not waited for; tests use a fake, so no process is ever started) starts `vigild.exe` with
+  `DaemonArguments.BuildArguments`, the very string `Build` puts in the value. Identical value and daemon running:
+  nothing. Identical value, daemon not running: only the start (macOS: unchanged plist not loaded, only bootstraps).
+  A start failure exits 1 and leaves the value written (macOS: a failed bootstrap leaves the plist). Replacing a differing value
+  (`--force`) while a daemon is running stops it first with `IDaemonStopper` (as `uninstall` does), and only then writes
+  the new value and starts the daemon; if the stop fails, the old value stays, nothing starts and the exit code is 1
+  (macOS: bootout before the plist changes). A fresh install with a daemon already running (for example `vigil run`)
+  starts nothing and leaves that daemon alone.
 - `uninstall` stops the daemon first and keeps the value if that fails, then deletes the value; `--purge` goes through
   `InstallFiles.Purge`, shared with the macOS flow: only the default directory named `Vigil`, never a link or reparse
   point, and on Windows retried a few times because the daemon may still be closing its files.
@@ -226,7 +236,8 @@ scripts/package-macos.sh osx-x64      # or osx-arm64; output: artifacts/<rid>/Vi
 
 The script runs the Native AOT publish, assembles `Vigil.app` (`Contents/MacOS/vigil`, an `Info.plist` with
 `CFBundleIdentifier` `io.github.yasarbudak.vigil`, the version from `<Version>` in `Directory.Build.props`,
-`LSMinimumSystemVersion` 12.0, `LSUIElement` true) and signs it ad hoc with that identifier. Every build produces a
+`LSMinimumSystemVersion` 12.0, `LSUIElement` true, and `Contents/Resources/LICENSE`, copied before signing so the
+signature seals it) and signs it ad hoc with that identifier. Every build produces a
 new ad-hoc signature, so the Accessibility entry must be enabled again after each rebuild. `artifacts/` is ignored by git.
 
 `vigil install` / `vigil uninstall` are implemented by `Install/LaunchAgentManager` (orchestration, file handling,
