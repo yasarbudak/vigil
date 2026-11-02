@@ -67,7 +67,14 @@ internal sealed class TmdsDBusConnection : IDBusConnection
         var writer = _connection.GetMessageWriter();
         try
         {
-            writer.WriteMethodCallHeader(call.Destination, call.Path, call.Interface, call.Signature, call.Member);
+            // Named on purpose: member and signature are both strings and adjacent, and swapping them compiles; the bus then
+            // rejects the message and drops the connection.
+            writer.WriteMethodCallHeader(
+                destination: call.Destination,
+                path: call.Path,
+                @interface: call.Interface,
+                member: call.Member,
+                signature: call.Signature);
             foreach (var value in call.Body)
             {
                 Write(ref writer, value);
